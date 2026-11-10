@@ -38,7 +38,6 @@ import androidx.compose.ui.unit.sp
 fun HomeScreen() {
     val context = LocalContext.current
 
-    // States
     var projects by remember { mutableStateOf(loadProjects(context)) }
     
     LaunchedEffect(projects) {
@@ -51,11 +50,12 @@ fun HomeScreen() {
     var projectToDelete by remember { mutableStateOf<Project?>(null) }
     var showImportDialog by remember { mutableStateOf(false) }
     var showZipPickerDialog by remember { mutableStateOf(false) }
-    
     var showCreateDialog by remember { mutableStateOf(false) }
     var openedProject by remember { mutableStateOf<Project?>(null) }
+    
+    // নতুন: টার্মিনাল ডায়ালগ দেখানোর জন্য
+    var showTerminal by remember { mutableStateOf(false) }
 
-    // Permissions & Launchers
     var hasPermission by remember { mutableStateOf(hasStoragePermission(context)) }
     val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
         hasPermission = hasStoragePermission(context)
@@ -77,7 +77,6 @@ fun HomeScreen() {
     ) {
         Spacer(modifier = Modifier.height(16.dp))
 
-        // হেডার এবং সার্চ বার
         if (!isSearchActive) {
             Box(modifier = Modifier.fillMaxWidth().shadow(elevation = 16.dp, shape = RoundedCornerShape(24.dp), ambientColor = Color(0xFFA855F7), spotColor = Color(0xFFA855F7)).clip(RoundedCornerShape(24.dp)).background(Brush.linearGradient(colors = listOf(Color(0xFFA855F7), Color(0xFF7C3AED)))).padding(16.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -106,7 +105,6 @@ fun HomeScreen() {
 
         Spacer(modifier = Modifier.height(24.dp))
 
-        // অ্যাকশন বাটনসমূহ
         if (!isSearchActive) {
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 PillButton(text = "Create project", icon = Icons.Default.Add, modifier = Modifier.weight(1f), onClick = { showCreateDialog = true })
@@ -114,10 +112,21 @@ fun HomeScreen() {
             }
             Spacer(modifier = Modifier.height(12.dp))
             PillButton(text = "Clone Git Repository", modifier = Modifier.fillMaxWidth(), onClick = { Toast.makeText(context, "Clone Repo", Toast.LENGTH_SHORT).show() })
+            
+            Spacer(modifier = Modifier.height(12.dp))
+            // নতুন টেস্ট বাটন
+            Button(
+                onClick = { showTerminal = true },
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00C2A8), contentColor = Color.Black),
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier.fillMaxWidth().height(54.dp)
+            ) {
+                Text("Test Linux Terminal (PRoot)", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+            }
+            
             Spacer(modifier = Modifier.height(28.dp))
         }
 
-        // টাইটেল
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             val titleText = if (filteredProjects.size > 1) "Your projects" else "Your project"
             Text(if (isSearchActive) "Search Result" else titleText, color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 22.sp)
@@ -127,7 +136,6 @@ fun HomeScreen() {
         }
         Spacer(modifier = Modifier.height(16.dp))
 
-        // প্রজেক্ট লিস্ট
         if (filteredProjects.isEmpty() && !isSearchActive) {
             Column(
                 modifier = Modifier.fillMaxSize().padding(top = 30.dp),
@@ -159,6 +167,11 @@ fun HomeScreen() {
     }
 
     // ================= ডায়ালগসমূহ =================
+
+    // টার্মিনাল ডায়ালগ
+    if (showTerminal) {
+        TerminalScreen(onDismiss = { showTerminal = false })
+    }
 
     if (projectForMenu != null) {
         ProjectMenuDialog(project = projectForMenu!!, onDismiss = { projectForMenu = null }, onDeleteClick = { projectToDelete = projectForMenu; projectForMenu = null })
@@ -204,28 +217,20 @@ fun HomeScreen() {
         )
     }
     
-    // Create Project Dialog (সরাসরি ফাইল তৈরি ও এডিটর ওপেন হবে)
     if (showCreateDialog) {
         CreateProjectDialog(
             onDismiss = { showCreateDialog = false },
             onCreate = { name, pkg, lang, minSdk, targetSdk ->
-                // ১. ল্যাঙ্গুয়েজ অনুযায়ী ফাইল তৈরি
                 createDefaultProjectFiles(context, name, pkg, lang, minSdk, targetSdk)
-                
-                // ২. লিস্টে যুক্ত করা
                 val newProject = Project(name, "Android • $lang • API $minSdk", NeonLime)
                 projects = projects + newProject
-                
-                // ৩. ডায়ালগ বন্ধ করে সরাসরি এডিটরে যাওয়া
                 showCreateDialog = false
                 openedProject = newProject
-                
                 Toast.makeText(context, "Project '$name' created!", Toast.LENGTH_SHORT).show()
             }
         )
     }
 
-    // Editor Screen
     if (openedProject != null) {
         EditorScreen(
             project = openedProject!!,
@@ -234,7 +239,6 @@ fun HomeScreen() {
     }
 }
 
-// বাটনের শেইপ (Pill Shape)
 @Composable
 fun PillButton(text: String, icon: ImageVector? = null, modifier: Modifier = Modifier, onClick: () -> Unit) {
     Button(

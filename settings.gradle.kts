@@ -2,7 +2,7 @@ pluginManagement {
     repositories {
         google()
         mavenCentral()
-        gradlePluginPortal()
+        gradlePluginPortal() // <--- এই লাইনটি Kotlin Compose প্লাগইন খুঁজে পেতে সাহায্য করবে
     }
 }
 dependencyResolutionManagement {
