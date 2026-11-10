@@ -1,0 +1,20 @@
+{
+  "allFiles": [
+    {
+      "file": "/storage/emulated/0/AndroidIDEProjects/CodeStudio/.github/workflows/build.yml",
+      "selection": {
+        "end": {
+          "column": 55,
+          "index": 678,
+          "line": 32
+        },
+        "start": {
+          "column": 55,
+          "index": 678,
+          "line": 32
+        }
+      }
+    }
+  ],
+  "selectedFile": "/storage/emulated/0/AndroidIDEProjects/CodeStudio/.github/workflows/build.yml"
+}
