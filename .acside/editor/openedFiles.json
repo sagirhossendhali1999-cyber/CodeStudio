@@ -29,7 +29,37 @@
           "line": 0
         }
       }
+    },
+    {
+      "file": "/storage/emulated/0/AndroidIDEProjects/CodeStudio/gradlew.bat",
+      "selection": {
+        "end": {
+          "column": 0,
+          "index": 0,
+          "line": 0
+        },
+        "start": {
+          "column": 0,
+          "index": 0,
+          "line": 0
+        }
+      }
+    },
+    {
+      "file": "/storage/emulated/0/AndroidIDEProjects/CodeStudio/build.gradle.kts",
+      "selection": {
+        "end": {
+          "column": 1,
+          "index": 241,
+          "line": 4
+        },
+        "start": {
+          "column": 1,
+          "index": 241,
+          "line": 4
+        }
+      }
     }
   ],
-  "selectedFile": "/storage/emulated/0/AndroidIDEProjects/CodeStudio/gradlew"
+  "selectedFile": "/storage/emulated/0/AndroidIDEProjects/CodeStudio/build.gradle.kts"
 }

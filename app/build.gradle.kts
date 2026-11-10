@@ -1,12 +1,11 @@
 plugins {
     id("com.android.application")
-    id("org.jetbrains.kotlin.android")
-    id("org.jetbrains.kotlin.plugin.compose") // Kotlin 2.0+ এর জন্য জরুরি
+    id("org.jetbrains.kotlin.plugin.compose") // Compose-এর জন্য এটি লাগবে
 }
 
 android {
     namespace = "com.shd.codestudio"
-    compileSdk = 35 // অ্যান্ড্রয়েড ১৫ (পারফরম্যান্সের জন্য ৩৫ বা ৩৬ দিতে পারেন)
+    compileSdk = 35
 
     defaultConfig {
         applicationId = "com.shd.codestudio"
@@ -23,14 +22,18 @@ android {
         }
     }
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_17 // JDK 17
-        targetCompatibility = JavaVersion.VERSION_17 // JDK 17
-    }
-    kotlinOptions {
-        jvmTarget = "17"
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
     }
     buildFeatures {
         compose = true
+    }
+}
+
+// AGP 9.0-এর নতুন নিয়ম অনুযায়ী Kotlin অপশনগুলো এখানে বসবে
+kotlin {
+    compilerOptions {
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
     }
 }
 
