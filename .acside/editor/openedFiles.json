@@ -4,14 +4,14 @@
       "file": "/storage/emulated/0/AndroidIDEProjects/CodeStudio/app/build.gradle.kts",
       "selection": {
         "end": {
-          "column": 64,
-          "index": 1849,
-          "line": 65
+          "column": 1,
+          "index": 2467,
+          "line": 76
         },
         "start": {
-          "column": 64,
-          "index": 1849,
-          "line": 65
+          "column": 1,
+          "index": 2467,
+          "line": 76
         }
       }
     },
@@ -20,13 +20,13 @@
       "selection": {
         "end": {
           "column": 1,
-          "index": 4426,
-          "line": 112
+          "index": 5044,
+          "line": 127
         },
         "start": {
           "column": 1,
-          "index": 4426,
-          "line": 112
+          "index": 5044,
+          "line": 127
         }
       }
     },
@@ -49,17 +49,17 @@
       "file": "/storage/emulated/0/AndroidIDEProjects/CodeStudio/app/src/main/kotlin/com/shd/codestudio/HomeScreen.kt",
       "selection": {
         "end": {
-          "column": 0,
-          "index": 0,
-          "line": 0
+          "column": 1,
+          "index": 14134,
+          "line": 261
         },
         "start": {
-          "column": 0,
-          "index": 0,
-          "line": 0
+          "column": 1,
+          "index": 14134,
+          "line": 261
         }
       }
     }
   ],
-  "selectedFile": "/storage/emulated/0/AndroidIDEProjects/CodeStudio/app/src/main/kotlin/com/shd/codestudio/HomeScreen.kt"
+  "selectedFile": "/storage/emulated/0/AndroidIDEProjects/CodeStudio/app/src/main/kotlin/com/shd/codestudio/PRootManager.kt"
 }

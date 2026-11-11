@@ -11,12 +11,26 @@ import java.io.InputStreamReader
 object PRootManager {
 
     fun getRootfsDir(context: Context): File = File(context.filesDir, "ubuntu-rootfs")
-    fun getProotBinary(context: Context): File = File(context.applicationInfo.nativeLibraryDir, "libproot.so")
+    
+    // libproot.so এখন filesDir-এ থাকবে
+    fun getProotBinary(context: Context): File = File(context.filesDir, "libproot.so")
 
-    // ১. রুটফাইল আনজিপ করা (প্রথমবার চালানোর সময়)
     fun setupEnvironment(context: Context, onOutput: (String) -> Unit) {
         Thread {
             try {
+                val prootBin = getProotBinary(context)
+                // ১. assets থেকে libproot.so কপি করা
+                if (!prootBin.exists()) {
+                    onOutput("Copying PRoot binary...")
+                    context.assets.open("libproot.so").use { input ->
+                        prootBin.outputStream().use { output ->
+                            input.copyTo(output)
+                        }
+                    }
+                    prootBin.setExecutable(true, false) // chmod +x
+                    onOutput("✅ PRoot binary ready.")
+                }
+
                 val rootfsDir = getRootfsDir(context)
                 if (rootfsDir.exists() && rootfsDir.listFiles()?.isNotEmpty() == true) {
                     onOutput("✅ Ubuntu RootFS already installed.")
@@ -24,6 +38,7 @@ object PRootManager {
                 }
                 rootfsDir.mkdirs()
 
+                // ২. Ubuntu RootFS আনজিপ করা
                 onOutput("Extracting Ubuntu RootFS (This may take 1-2 minutes)...")
                 context.assets.open("ubuntu-rootfs.tar.gz").use { inputStream ->
                     GzipCompressorInputStream(inputStream).use { gzip ->
@@ -48,12 +63,12 @@ object PRootManager {
                 }
                 onOutput("✅ RootFS Extraction Complete!")
             } catch (e: Exception) {
-                onOutput("❌ Extraction Failed: ${e.message}")
+                onOutput("❌ Error: ${e.message ?: e.toString()}")
+                e.printStackTrace()
             }
         }.start()
     }
 
-    // ২. লিনাক্স কমান্ড রান করা
     fun runInPRoot(
         context: Context,
         command: String,
@@ -105,7 +120,7 @@ object PRootManager {
 
             } catch (e: Exception) {
                 e.printStackTrace()
-                onOutput("❌ ERROR: ${e.message}")
+                onOutput("❌ ERROR: ${e.message ?: e.toString()}")
                 onComplete(false)
             }
         }.start()
