@@ -16,6 +16,10 @@ import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.nio.file.Path
 import java.security.MessageDigest
+import java.util.Collections
+import java.util.concurrent.Callable
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
@@ -72,12 +76,13 @@ object D8DexPipeline {
             return DexPipelineResult(false, emptyList(), errorMessage = "No .class files or libraries found to dex.")
         }
 
-        val diagnostics = ArrayList<BuildDiagnosticItem>()
+        val diagnostics = Collections.synchronizedList(ArrayList<BuildDiagnosticItem>())
+        val logLock = Any()
         val diagHandler = object : DiagnosticsHandler {
             override fun error(error: Diagnostic) {
                 val msg = error.diagnosticMessage ?: "D8/R8 error"
                 diagnostics.add(BuildDiagnosticItem("D8/R8", 0, 0, msg, isError = true))
-                onLog("  ERROR (D8/R8): $msg")
+                synchronized(logLock) { onLog("  ERROR (D8/R8): $msg") }
             }
 
             override fun warning(warning: Diagnostic) {
@@ -102,7 +107,7 @@ object D8DexPipeline {
                     onLog = onLog
                 )
             } else {
-                runDebugIncrementalD8(
+                runDebugParallelD8(
                     context = context,
                     minSdk = module.minSdk,
                     appClassPaths = appClassPaths,
@@ -122,14 +127,14 @@ object D8DexPipeline {
                 ?: emptyList()
 
             if (dexOut.isEmpty()) {
-                DexPipelineResult(false, emptyList(), diagnostics, "D8/R8 produced no .dex files.")
+                DexPipelineResult(false, emptyList(), diagnostics.toList(), "D8/R8 produced no .dex files.")
             } else {
-                DexPipelineResult(true, dexOut, diagnostics)
+                DexPipelineResult(true, dexOut, diagnostics.toList())
             }
         } catch (e: Exception) {
             val msg = e.message ?: "D8/R8 dexing failed"
             onLog("  ERROR: $msg")
-            DexPipelineResult(false, emptyList(), diagnostics, msg)
+            DexPipelineResult(false, emptyList(), diagnostics.toList(), msg)
         }
     }
 
@@ -257,7 +262,7 @@ object D8DexPipeline {
         return result
     }
 
-    private fun runDebugIncrementalD8(
+    private fun runDebugParallelD8(
         context: Context,
         minSdk: Int,
         appClassPaths: List<Path>,
@@ -271,43 +276,67 @@ object D8DexPipeline {
     ) {
         val extDexCache = getExtDexCacheDir(context)
         val allJarPaths = libraryJars.map { it.toPath() }
-        val mergeInputs = ArrayList<Path>()
+        val androidPath = androidJar.toPath()
 
-        var newlyDexedLibs = 0
-        for (jar in libraryJars) {
-            if (isCancelled()) throw IllegalStateException("Cancelled")
+        data class LibTarget(val jar: File, val cachedZip: File, val okMarker: File, val needsDex: Boolean)
+
+        val targets = libraryJars.map { jar ->
             val cacheKey = buildJarCacheKey(jar, minSdk)
             val cachedDexZip = File(extDexCache, "$cacheKey.dex.zip")
             val okMarker = File(extDexCache, "$cacheKey.ok")
+            val ready = okMarker.exists() && cachedDexZip.exists() && cachedDexZip.length() > 0L
+            LibTarget(jar, cachedDexZip, okMarker, !ready)
+        }
 
-            if (!okMarker.exists() || !cachedDexZip.exists() || cachedDexZip.length() == 0L) {
-                if (cachedDexZip.exists()) cachedDexZip.delete()
-                if (newlyDexedLibs == 0) {
-                    onLog("  Pre-dexing external libraries (cached for future builds)...")
+        val uncached = targets.filter { it.needsDex }
+        if (libraryJars.isNotEmpty() && uncached.isEmpty()) {
+            onLog("  Prebuilt cache hit (${libraryJars.size} libraries skipped in 0ms)")
+        } else if (uncached.isNotEmpty()) {
+            val lowMem = SdkEngineManager.isLowMemoryMode(context)
+            val threads = if (lowMem) 1 else Runtime.getRuntime().availableProcessors().coerceIn(2, 4)
+            onLog("  Pre-dexing ${uncached.size} library JAR(s) (${threads}x parallel, cached for future builds)...")
+
+            val completed = AtomicInteger(0)
+            val total = uncached.size
+            val logLock = Any()
+
+            if (threads == 1) {
+                for (t in uncached) {
+                    if (isCancelled()) throw IllegalStateException("Cancelled")
+                    dexSingleLibraryJar(t.jar, t.cachedZip, t.okMarker, androidPath, allJarPaths, minSdk, diagHandler)
+                    val done = completed.incrementAndGet()
+                    if (done == total || done % 8 == 0) {
+                        onLog("  Pre-dexed $done/$total libraries")
+                    }
                 }
-                newlyDexedLibs++
-                val jarPath = jar.toPath()
-                val otherClasspath = allJarPaths.filter { it != jarPath }
-                val libCmd = D8Command.builder(diagHandler)
-                    .setMode(CompilationMode.RELEASE)
-                    .setMinApiLevel(minSdk)
-                    .setIntermediate(true)
-                    .addLibraryFiles(androidJar.toPath())
-                    .addClasspathFiles(otherClasspath)
-                    .addProgramFiles(jarPath)
-                    .setOutput(cachedDexZip.toPath(), OutputMode.DexIndexed)
-                    .build()
-                D8.run(libCmd)
-                if (cachedDexZip.exists() && cachedDexZip.length() > 0L) {
-                    okMarker.writeText("ok")
+            } else {
+                val pool = Executors.newFixedThreadPool(threads)
+                try {
+                    val futures = uncached.map { t ->
+                        pool.submit(Callable {
+                            if (isCancelled()) throw IllegalStateException("Cancelled")
+                            dexSingleLibraryJar(t.jar, t.cachedZip, t.okMarker, androidPath, allJarPaths, minSdk, diagHandler)
+                            val done = completed.incrementAndGet()
+                            if (done == total || done % 8 == 0) {
+                                synchronized(logLock) { onLog("  Pre-dexed $done/$total libraries") }
+                            }
+                        })
+                    }
+                    for (f in futures) {
+                        if (isCancelled()) throw IllegalStateException("Cancelled")
+                        f.get()
+                    }
+                } finally {
+                    pool.shutdownNow()
                 }
-            }
-            if (cachedDexZip.exists() && cachedDexZip.length() > 0L) {
-                mergeInputs.add(cachedDexZip.toPath())
             }
         }
-        if (libraryJars.isNotEmpty() && newlyDexedLibs == 0) {
-            onLog("  ExtDex cache hit (${libraryJars.size} libraries skipped in 0ms)")
+
+        val mergeInputs = ArrayList<Path>()
+        for (t in targets) {
+            if (t.cachedZip.exists() && t.cachedZip.length() > 0L) {
+                mergeInputs.add(t.cachedZip.toPath())
+            }
         }
 
         if (appClassPaths.isNotEmpty()) {
@@ -319,7 +348,7 @@ object D8DexPipeline {
                 .setMode(CompilationMode.DEBUG)
                 .setMinApiLevel(minSdk)
                 .setIntermediate(true)
-                .addLibraryFiles(androidJar.toPath())
+                .addLibraryFiles(androidPath)
                 .addClasspathFiles(allJarPaths)
                 .addProgramFiles(appClassPaths)
                 .setOutput(appDexZip.toPath(), OutputMode.DexIndexed)
@@ -335,11 +364,49 @@ object D8DexPipeline {
                 .setMode(CompilationMode.DEBUG)
                 .setMinApiLevel(minSdk)
                 .setIntermediate(false)
-                .addLibraryFiles(androidJar.toPath())
+                .addLibraryFiles(androidPath)
                 .addProgramFiles(mergeInputs)
                 .setOutput(finalDexDir.toPath(), OutputMode.DexIndexed)
                 .build()
             D8.run(mergeCmd)
+        }
+    }
+
+    private fun dexSingleLibraryJar(
+        jar: File,
+        cachedDexZip: File,
+        okMarker: File,
+        androidPath: Path,
+        allJarPaths: List<Path>,
+        minSdk: Int,
+        diagHandler: DiagnosticsHandler
+    ) {
+        val tmpZip = File(cachedDexZip.parentFile, "${cachedDexZip.name}.tmp")
+        if (tmpZip.exists()) tmpZip.delete()
+        if (cachedDexZip.exists()) cachedDexZip.delete()
+        if (okMarker.exists()) okMarker.delete()
+
+        val jarPath = jar.toPath()
+        val otherClasspath = allJarPaths.filter { it != jarPath }
+        val libCmd = D8Command.builder(diagHandler)
+            .setMode(CompilationMode.RELEASE)
+            .setMinApiLevel(minSdk)
+            .setIntermediate(true)
+            .addLibraryFiles(androidPath)
+            .addClasspathFiles(otherClasspath)
+            .addProgramFiles(jarPath)
+            .setOutput(tmpZip.toPath(), OutputMode.DexIndexed)
+            .build()
+        D8.run(libCmd)
+
+        if (tmpZip.exists() && tmpZip.length() > 0L) {
+            if (!tmpZip.renameTo(cachedDexZip)) {
+                tmpZip.copyTo(cachedDexZip, overwrite = true)
+                tmpZip.delete()
+            }
+            okMarker.writeText("ok")
+        } else {
+            tmpZip.delete()
         }
     }
 
@@ -361,7 +428,7 @@ object D8DexPipeline {
                 """
                 -dontwarn **
                 -ignorewarnings
-                -keepattributes *Annotation*,Signature,InnerClasses,EnclosingMethod
+                -keepattributes *Annotation*,Signature,InnerClasses,EnclosingMethod,RuntimeVisibleAnnotations,AnnotationDefault
                 -keep class ${module.namespace}.** { *; }
                 -keep class ${module.applicationId}.** { *; }
                 -keep public class * extends android.app.Application
@@ -371,6 +438,12 @@ object D8DexPipeline {
                 -keep public class * extends android.content.ContentProvider
                 -keepclassmembers class * extends android.app.Activity {
                     public void *(android.view.View);
+                }
+                -keepclassmembers class * implements android.os.Parcelable {
+                    public static final ** CREATOR;
+                }
+                -keepclassmembers class * {
+                    @kotlinx.serialization.Serializable <init>(...);
                 }
                 """.trimIndent() + "\n"
             )

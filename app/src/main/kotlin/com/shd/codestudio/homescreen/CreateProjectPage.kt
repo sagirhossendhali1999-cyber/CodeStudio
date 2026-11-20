@@ -105,13 +105,17 @@ fun createProjectByLanguage(
     packageName: String,
     language: String,
     minSdk: Int,
-    targetSdk: Int
+    targetSdk: Int,
+    toolchainPreset: String = "AGP9"
 ) {
     try {
-        val agpVersion = "9.3.1"
-        val gradleVersion = "9.4.1"
-        val kotlinVersion = "2.4.21"
-        val isAgp9Plus = true
+        val isAgp9Plus = toolchainPreset != "AGP8"
+        val agpVersion = if (isAgp9Plus) "9.3.1" else "8.13.2"
+        val gradleVersion = if (isAgp9Plus) "9.5.0" else "8.13"
+        val kotlinVersion = if (isAgp9Plus) "2.4.21" else "2.1.21"
+        val composeBomVersion = if (isAgp9Plus) "2026.09.00" else "2025.05.00"
+        val coreKtxVersion = if (isAgp9Plus) "1.17.0" else "1.16.0"
+        val activityComposeVersion = if (isAgp9Plus) "1.11.0" else "1.10.1"
 
         val cleanProjectName = projectName.trim()
         val projectDir = getProjectDirectory(context, cleanProjectName)
@@ -140,14 +144,13 @@ fun createProjectByLanguage(
             """.trimIndent() + "\n"
         )
 
-        // সব IDE এবং CI/CD-তে ইউনিভার্সাল কম্প্যাটিবিলিটির জন্য Gradle প্রপার্টিজ
+        // সব IDE (Android Studio, CodeAssist, Gradle CLI, CodeStudio) কম্প্যাটিবল properties
         File(projectDir, "gradle.properties").writeText(
             """
             org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
             android.useAndroidX=true
             kotlin.code.style=official
             android.nonTransitiveRClass=true
-            android.defaults.buildfeatures.buildconfig=true
             """.trimIndent() + "\n"
         )
 
@@ -174,7 +177,7 @@ fun createProjectByLanguage(
             """.trimIndent() + "\n"
         )
 
-        // GitHub Actions অটো-বিল্ড ওয়ার্কফ্লো (সব প্রজেক্টেই রেডি থাকবে)
+        // GitHub Actions অটো-বিল্ড ওয়ার্কফ্লো (সব প্রজেক্টেই লেটেস্ট Node24 কম্প্যাটিবল Actions সহ রেডি থাকবে)
         val workflowDir = File(projectDir, ".github/workflows").apply { mkdirs() }
         File(workflowDir, "android.yml").writeText(
             """
@@ -190,30 +193,30 @@ fun createProjectByLanguage(
                 runs-on: ubuntu-latest
                 steps:
                   - name: Checkout Repository
-                    uses: actions/checkout@v4
+                    uses: actions/checkout@v6
 
                   - name: Set up JDK 17
-                    uses: actions/setup-java@v4
+                    uses: actions/setup-java@v5
                     with:
                       java-version: '17'
                       distribution: 'temurin'
 
-                  - name: Setup Gradle & Permissions
-                    run: |
-                      if [ -f "./gradlew" ]; then
-                        chmod +x gradlew
-                      fi
+                  - name: Setup Gradle $gradleVersion
+                    uses: gradle/actions/setup-gradle@v6
+                    with:
+                      gradle-version: '$gradleVersion'
 
                   - name: Build Debug APK
                     run: |
                       if [ -f "./gradlew" ] && [ -f "./gradle/wrapper/gradle-wrapper.jar" ]; then
+                        chmod +x gradlew
                         ./gradlew assembleDebug --no-daemon
                       else
                         gradle assembleDebug --no-daemon
                       fi
 
                   - name: Upload Debug APK
-                    uses: actions/upload-artifact@v4
+                    uses: actions/upload-artifact@v7
                     with:
                       name: app-debug-apk
                       path: app/build/outputs/apk/debug/*.apk
@@ -245,15 +248,15 @@ fun createProjectByLanguage(
             [versions]
             agp = "$agpVersion"
             kotlin = "$kotlinVersion"
-            coreKtx = "1.16.0"
+            coreKtx = "$coreKtxVersion"
             lifecycleRuntimeKtx = "2.9.0"
             junit = "4.13.2"
             junitVersion = "1.2.1"
             espressoCore = "3.6.1"
             appcompat = "1.7.0"
             material = "1.12.0"
-            activityCompose = "1.10.1"
-            composeBom = "2025.05.00"
+            activityCompose = "$activityComposeVersion"
+            composeBom = "$composeBomVersion"
 
             [libraries]
             androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -280,6 +283,8 @@ fun createProjectByLanguage(
             distributionBase=GRADLE_USER_HOME
             distributionPath=wrapper/dists
             distributionUrl=https\://services.gradle.org/distributions/gradle-$gradleVersion-bin.zip
+            networkTimeout=10000
+            validateDistributionUrl=true
             zipStoreBase=GRADLE_USER_HOME
             zipStorePath=wrapper/dists
             """.trimIndent() + "\n"
@@ -766,6 +771,7 @@ fun createProjectByLanguage(
                     import androidx.activity.compose.setContent
                     import androidx.compose.foundation.layout.Box
                     import androidx.compose.foundation.layout.fillMaxSize
+                    import androidx.compose.foundation.layout.padding
                     import androidx.compose.material3.Scaffold
                     import androidx.compose.material3.Text
                     import androidx.compose.runtime.Composable
@@ -781,7 +787,9 @@ fun createProjectByLanguage(
                                 ${asciiId.replaceFirstChar { it.uppercase() }}Theme {
                                     Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
                                         Box(
-                                            modifier = Modifier.fillMaxSize(),
+                                            modifier = Modifier
+                                                .fillMaxSize()
+                                                .padding(innerPadding),
                                             contentAlignment = Alignment.Center
                                         ) {
                                             Greeting(name = "$cleanProjectName")
@@ -1038,6 +1046,7 @@ fun CreateProjectPage(
     var showFinalError by remember { mutableStateOf("") }
     var hasAttemptedSubmit by remember { mutableStateOf(false) }
 
+    var selectedToolchain by remember { mutableStateOf("AGP9") }
     var selectedLanguage by remember { mutableStateOf("Kotlin") }
     var selectedMinSdk by remember { mutableIntStateOf(26) }
     var selectedTargetSdk by remember { mutableIntStateOf(36) }
@@ -1060,6 +1069,12 @@ fun CreateProjectPage(
     val nameError = validateProjectName(projectName)
     val pkgError = validatePackageName(packageName)
     val isSdkValid = selectedTargetSdk >= selectedMinSdk
+
+    val toolchainBannerText = if (selectedToolchain == "AGP9") {
+        "Toolchain: AGP 9.3.1 • Gradle 9.5.0 • Kotlin 2.4.21"
+    } else {
+        "Toolchain: AGP 8.13.2 • Gradle 8.13 • Kotlin 2.1.21"
+    }
 
     Column(
         modifier = Modifier
@@ -1092,7 +1107,7 @@ fun CreateProjectPage(
             Spacer(modifier = Modifier.width(6.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text("Create Project", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                Text("Universal Android Studio & CodeStudio Project", color = TextSecondary, fontSize = 11.sp)
+                Text("Universal Android Studio, CodeAssist & CodeStudio", color = TextSecondary, fontSize = 11.sp)
             }
         }
 
@@ -1123,19 +1138,51 @@ fun CreateProjectPage(
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(bottom = 12.dp)
+                            .padding(bottom = 10.dp)
                             .clip(RoundedCornerShape(10.dp))
                             .background(NeonLime.copy(alpha = 0.08f))
                             .border(0.8.dp, NeonLime.copy(alpha = 0.35f), RoundedCornerShape(10.dp))
                             .padding(horizontal = 10.dp, vertical = 7.dp)
                     ) {
                         Text(
-                            text = "Toolchain: AGP 9.3.1 • Gradle 9.4.1 • Kotlin 2.4.21",
+                            text = toolchainBannerText,
                             color = NeonLime,
                             fontSize = 10.sp,
                             fontFamily = FontFamily.Monospace,
                             fontWeight = FontWeight.SemiBold
                         )
+                    }
+
+                    // ০. Toolchain Compatibility Preset
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 14.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        listOf(
+                            "AGP9" to "AGP 9.3 (Modern)",
+                            "AGP8" to "AGP 8.13 (Universal)"
+                        ).forEach { (preset, label) ->
+                            val active = selectedToolchain == preset
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(34.dp)
+                                    .clip(RoundedCornerShape(50))
+                                    .background(if (active) NeonLime.copy(alpha = 0.15f) else SurfaceDark)
+                                    .border(1.dp, if (active) NeonLime else SurfaceLight, RoundedCornerShape(50))
+                                    .clickable { selectedToolchain = preset },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = label,
+                                    color = if (active) NeonLime else Color.LightGray,
+                                    fontSize = 11.sp,
+                                    fontWeight = if (active) FontWeight.Bold else FontWeight.Normal
+                                )
+                            }
+                        }
                     }
 
                     // ১. Project Name
@@ -1276,7 +1323,7 @@ fun CreateProjectPage(
 
                     Spacer(modifier = Modifier.height(20.dp))
 
-                    // ৪. Minimum SDK (API 24+ যাতে সব ডিভাইসে চলে)
+                    // ৪. Minimum SDK
                     Text("Minimum SDK", color = TextSecondary, fontSize = 13.sp, fontWeight = FontWeight.Bold)
                     Spacer(modifier = Modifier.height(6.dp))
                     val minSdks = listOf(
@@ -1443,7 +1490,8 @@ fun CreateProjectPage(
                                     packageName = packageName,
                                     language = selectedLanguage,
                                     minSdk = selectedMinSdk,
-                                    targetSdk = selectedTargetSdk
+                                    targetSdk = selectedTargetSdk,
+                                    toolchainPreset = selectedToolchain
                                 )
                                 onCreate(projectName, packageName, selectedLanguage, selectedMinSdk, selectedTargetSdk)
                             }

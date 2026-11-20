@@ -1,6 +1,7 @@
 package com.shd.codestudio.nativeengine
 
 import android.content.Context
+import org.json.JSONObject
 import org.xmlpull.v1.XmlPullParser
 import org.xmlpull.v1.XmlPullParserFactory
 import java.io.BufferedReader
@@ -137,6 +138,22 @@ object Aapt2ResourcePipeline {
             }
         }
 
+        // Firebase google-services.json অটো-রিসোর্স জেনারেশন ও কম্পাইলেশন
+        val gsFile = module.googleServicesFile
+            ?: File(module.moduleDir, "google-services.json").takeIf { it.exists() && it.isFile }
+        if (gsFile != null) {
+            val gsResDir = File(workDir, "intermediates/google_services_res")
+            if (generateGoogleServicesResXml(gsFile, module.applicationId, gsResDir)) {
+                val gsZip = File(workDir, "intermediates/google_services_res.zip")
+                val (ok, _, diags) = runAapt2CompileDir(aapt2Bin, gsResDir, gsZip)
+                diagnostics.addAll(diags)
+                if (ok && gsZip.exists() && gsZip.length() > 0L) {
+                    compiledZips.add(gsZip)
+                    onLog("  Processed google-services.json for Firebase (${module.applicationId})")
+                }
+            }
+        }
+
         val subModFlatDir = File(workDir, "intermediates/submod_res_flat").apply {
             if (exists()) deleteRecursively()
             mkdirs()
@@ -266,6 +283,77 @@ object Aapt2ResourcePipeline {
             generatedJavaDir = genJavaDir,
             diagnostics = diagnostics
         )
+    }
+
+    private fun generateGoogleServicesResXml(gsFile: File, applicationId: String, outResDir: File): Boolean {
+        return try {
+            val root = JSONObject(gsFile.readText(Charsets.UTF_8))
+            val projectInfo = root.optJSONObject("project_info") ?: return false
+            val projectNum = projectInfo.optString("project_number", "")
+            val projectId = projectInfo.optString("project_id", "")
+            val firebaseUrl = projectInfo.optString("firebase_url", "")
+            val storageBucket = projectInfo.optString("storage_bucket", "")
+
+            val clients = root.optJSONArray("client") ?: return false
+            var matchedClient: JSONObject? = null
+            for (i in 0 until clients.length()) {
+                val c = clients.getJSONObject(i)
+                val pkg = c.optJSONObject("client_info")
+                    ?.optJSONObject("android_client_info")
+                    ?.optString("package_name", "")
+                if (pkg == applicationId) {
+                    matchedClient = c
+                    break
+                }
+            }
+            if (matchedClient == null && clients.length() > 0) {
+                matchedClient = clients.getJSONObject(0)
+            }
+            if (matchedClient == null) return false
+
+            val appId = matchedClient.optJSONObject("client_info")?.optString("mobilesdk_app_id", "") ?: ""
+            val apiKey = matchedClient.optJSONArray("api_key")?.optJSONObject(0)?.optString("current_key", "") ?: ""
+            var webClientId = ""
+            val oauthClients = matchedClient.optJSONArray("oauth_client")
+            if (oauthClients != null) {
+                for (i in 0 until oauthClients.length()) {
+                    val oc = oauthClients.getJSONObject(i)
+                    if (oc.optInt("client_type") == 3) {
+                        webClientId = oc.optString("client_id", "")
+                        break
+                    }
+                }
+            }
+
+            val entries = linkedMapOf<String, String>()
+            if (appId.isNotBlank()) entries["google_app_id"] = appId
+            if (projectNum.isNotBlank()) entries["gcm_defaultSenderId"] = projectNum
+            if (webClientId.isNotBlank()) entries["default_web_client_id"] = webClientId
+            if (firebaseUrl.isNotBlank()) entries["firebase_database_url"] = firebaseUrl
+            if (apiKey.isNotBlank()) {
+                entries["google_api_key"] = apiKey
+                entries["google_crash_reporting_api_key"] = apiKey
+            }
+            if (projectId.isNotBlank()) entries["project_id"] = projectId
+            if (storageBucket.isNotBlank()) entries["google_storage_bucket"] = storageBucket
+
+            if (entries.isEmpty()) return false
+
+            val valuesDir = File(outResDir, "values").apply { mkdirs() }
+            val xml = buildString {
+                appendLine("""<?xml version="1.0" encoding="utf-8"?>""")
+                appendLine("<resources>")
+                entries.forEach { (k, v) ->
+                    val safeVal = v.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                    appendLine("""    <string name="$k" translatable="false">$safeVal</string>""")
+                }
+                appendLine("</resources>")
+            }
+            File(valuesDir, "google_services.xml").writeText(xml, Charsets.UTF_8)
+            true
+        } catch (_: Exception) {
+            false
+        }
     }
 
     private fun runAapt2CompileDir(

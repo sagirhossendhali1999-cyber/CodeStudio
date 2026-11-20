@@ -4,29 +4,33 @@ import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.outlined.Build
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.CloudDownload
-import androidx.compose.material.icons.outlined.Code
 import androidx.compose.material.icons.outlined.DeleteSweep
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Key
-import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.Lock
+import androidx.compose.material.icons.outlined.Memory
 import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material.icons.outlined.Warning
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -69,17 +73,18 @@ fun EngineManagerDialog(
     var installedApis by remember { mutableStateOf<List<Int>>(emptyList()) }
     var savedKeystore by remember { mutableStateOf<CustomKeystoreConfig?>(null) }
     var cacheStats by remember { mutableStateOf(EngineCacheStats(0L, 0L, 0L, 0L)) }
+    var lowMemoryMode by remember { mutableStateOf(SdkEngineManager.isLowMemoryMode(context)) }
+    var hasBundledOffline by remember { mutableStateOf(SdkEngineManager.hasBundledEngineAssets(context)) }
     var refreshTick by remember { mutableIntStateOf(0) }
 
+    var showAdvancedSdk by remember { mutableStateOf(false) }
     var downloadProgress by remember { mutableStateOf<SdkDownloadProgress?>(null) }
-    var kotlincProgress by remember { mutableStateOf<KotlincDownloadProgress?>(null) }
     val cancelFlag = remember { AtomicBoolean(false) }
 
     var pendingImportApi by remember { mutableIntStateOf(recommendedApi.coerceIn(30, 37)) }
     var isImporting by remember { mutableStateOf(false) }
     var isImportingKotlinc by remember { mutableStateOf(false) }
 
-    var showKotlincUrlDialog by remember { mutableStateOf(false) }
     var showCreateKeystoreDialog by remember { mutableStateOf(false) }
     var importedKeystoreFile by remember { mutableStateOf<File?>(null) }
 
@@ -139,16 +144,19 @@ fun EngineManagerDialog(
     }
 
     LaunchedEffect(refreshTick) {
+        SdkEngineManager.ensureBundledOfflineEngineReady(context)
         aapt2Status = SdkEngineManager.inspectAapt2Health(context)
         kotlincStatus = SdkEngineManager.getKotlincPackStatus(context)
         installedApis = SdkEngineManager.getInstalledApiLevels(context)
         savedKeystore = SdkEngineManager.loadKeystoreConfig(context)
         cacheStats = SdkEngineManager.getCacheStats(context)
+        lowMemoryMode = SdkEngineManager.isLowMemoryMode(context)
+        hasBundledOffline = SdkEngineManager.hasBundledEngineAssets(context)
     }
 
-    val isBusy = downloadProgress != null || kotlincProgress != null || isImporting || isImportingKotlinc
-    // Zero-Setup Auto-Pilot: শুধু AAPT2 থাকলেই সরাসরি বিল্ড করা যাবে; SDK ও Kotlinc না থাকলে অটো সেটআপ হবে!
-    val canBuildAutoPilot = aapt2Status?.isExecutable == true
+    val isBusy = downloadProgress != null || isImporting || isImportingKotlinc
+    val aaptReady = aapt2Status?.isExecutable == true
+    val engineReady = aaptReady && ((kotlincStatus?.isInstalled == true) || hasBundledOffline)
 
     Dialog(
         onDismissRequest = { if (!isBusy) onDismiss() },
@@ -159,11 +167,11 @@ fun EngineManagerDialog(
             color = Color(0xFF131419),
             border = BorderStroke(
                 1.dp,
-                if (canBuildAutoPilot) NeonLime.copy(alpha = 0.45f) else Color(0xFFFFB020).copy(alpha = 0.45f)
+                if (aaptReady) NeonLime.copy(alpha = 0.45f) else Color(0xFFFFB020).copy(alpha = 0.45f)
             ),
             modifier = Modifier
                 .fillMaxWidth(0.94f)
-                .fillMaxHeight(0.86f)
+                .fillMaxHeight(0.82f)
         ) {
             Column(
                 modifier = Modifier
@@ -187,8 +195,8 @@ fun EngineManagerDialog(
                     }
                     Spacer(modifier = Modifier.width(10.dp))
                     Column(modifier = Modifier.weight(1f)) {
-                        Text("Native Engine Manager", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
-                        Text("Zero-Setup Auto-Pilot • Kotlin/Compose + Java + D8/R8", color = TextSecondary, fontSize = 10.sp)
+                        Text("Build Runtime & Signing", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                        Text("All-in-One Offline Engine • No Setup Required", color = TextSecondary, fontSize = 10.sp)
                     }
                     IconButton(
                         onClick = { refreshTick++ },
@@ -211,31 +219,33 @@ fun EngineManagerDialog(
                     modifier = Modifier.weight(1f),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    // ================= ১. AAPT2 ARM64 স্ট্যাটাস কার্ড =================
+                    // ================= ১. All-in-One Build Runtime Status Card =================
                     item {
-                        val st = aapt2Status
-                        val aaptOk = st?.isExecutable == true
-                        val cardColor = if (aaptOk) NeonLime else Color(0xFFFF5252)
+                        val kSt = kotlincStatus
+                        val cardColor = if (engineReady) NeonLime else if (aaptReady) Color(0xFF58A6FF) else Color(0xFFFF5252)
 
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clip(RoundedCornerShape(14.dp))
                                 .background(Color(0xFF1A1B22))
-                                .border(1.dp, cardColor.copy(alpha = 0.4f), RoundedCornerShape(14.dp))
+                                .border(1.dp, cardColor.copy(alpha = 0.45f), RoundedCornerShape(14.dp))
                                 .padding(12.dp)
                         ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
                                 Icon(
-                                    imageVector = if (aaptOk) Icons.Outlined.CheckCircle else Icons.Outlined.Warning,
+                                    imageVector = if (aaptReady) Icons.Outlined.CheckCircle else Icons.Outlined.Warning,
                                     contentDescription = null,
                                     tint = cardColor,
                                     modifier = Modifier.size(18.dp)
                                 )
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Text(
-                                    text = if (aaptOk) "ARM64 AAPT2: Active" else "ARM64 AAPT2: Action Required",
-                                    color = if (aaptOk) NeonLime else Color(0xFFFF8A80),
+                                    text = if (aaptReady) "Offline Build Runtime" else "AAPT2 Missing",
+                                    color = Color.White,
                                     fontSize = 13.sp,
                                     fontWeight = FontWeight.Bold,
                                     modifier = Modifier.weight(1f)
@@ -244,210 +254,105 @@ fun EngineManagerDialog(
                                     modifier = Modifier
                                         .clip(RoundedCornerShape(6.dp))
                                         .background(cardColor.copy(alpha = 0.16f))
-                                        .padding(horizontal = 7.dp, vertical = 2.dp)
+                                        .padding(horizontal = 8.dp, vertical = 3.dp)
                                 ) {
                                     Text(
-                                        text = if (aaptOk) "READY" else "MISSING",
+                                        text = if (engineReady) "READY" else if (aaptReady) "AUTO-PILOT" else "ERROR",
                                         color = cardColor,
                                         fontSize = 9.sp,
                                         fontWeight = FontWeight.Bold,
-                                        fontFamily = FontFamily.Monospace
-                                    )
-                                }
-                            }
-                            Spacer(modifier = Modifier.height(6.dp))
-                            Text(
-                                text = st?.message ?: "Checking AAPT2 binary...",
-                                color = Color.LightGray,
-                                fontSize = 11.sp,
-                                lineHeight = 15.sp
-                            )
-                        }
-                    }
-
-                    // ================= ২. Kotlin + Compose Compiler Pack Card =================
-                    item {
-                        val kSt = kotlincStatus
-                        val kOk = kSt?.isInstalled == true
-                        val cardBorder = if (kOk) NeonLime.copy(alpha = 0.45f) else Color(0xFFA855F7).copy(alpha = 0.4f)
-
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(14.dp))
-                                .background(if (kOk) NeonLime.copy(alpha = 0.06f) else Color(0xFF1A1B22))
-                                .border(1.dp, cardBorder, RoundedCornerShape(14.dp))
-                                .padding(12.dp)
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    imageVector = Icons.Outlined.Code,
-                                    contentDescription = null,
-                                    tint = if (kOk) NeonLime else Color(0xFFA855F7),
-                                    modifier = Modifier.size(18.dp)
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Text(
-                                            text = "Kotlin + Compose Compiler Pack",
-                                            color = Color.White,
-                                            fontSize = 12.sp,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                        Spacer(modifier = Modifier.width(6.dp))
-                                        Box(
-                                            modifier = Modifier
-                                                .clip(RoundedCornerShape(4.dp))
-                                                .background((if (kOk) NeonLime else Color(0xFFA855F7)).copy(alpha = 0.18f))
-                                                .padding(horizontal = 5.dp, vertical = 1.dp)
-                                        ) {
-                                            Text(
-                                                text = if (kOk) "INSTALLED" else "AUTO-PILOT",
-                                                color = if (kOk) NeonLime else Color(0xFFD8B4FE),
-                                                fontSize = 8.sp,
-                                                fontWeight = FontWeight.Bold
-                                            )
-                                        }
-                                    }
-                                    Text(
-                                        text = if (kOk) {
-                                            "Kotlin ${kSt!!.kotlinVersion} • ${if (kSt.composePluginAvailable) "Compose IR" else "Core"} • ${formatSize(kSt.totalSizeBytes)}"
-                                        } else {
-                                            "Auto-downloads on first Kotlin build, or tap Get / Import ZIP"
-                                        },
-                                        color = if (kOk) NeonLime.copy(alpha = 0.9f) else TextSecondary,
-                                        fontSize = 10.sp,
-                                        maxLines = 2,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                }
-
-                                if (kOk) {
-                                    IconButton(
-                                        onClick = {
-                                            SdkEngineManager.deleteKotlincPack(context)
-                                            refreshTick++
-                                            Toast.makeText(context, "Removed Kotlin Compiler Pack", Toast.LENGTH_SHORT).show()
-                                        },
-                                        enabled = !isBusy,
-                                        modifier = Modifier.size(32.dp)
-                                    ) {
-                                        Icon(Icons.Default.Delete, contentDescription = "Remove", tint = Color(0xFFFF5252), modifier = Modifier.size(17.dp))
-                                    }
-                                } else {
-                                    Button(
-                                        onClick = {
-                                            cancelFlag.set(false)
-                                            kotlincProgress = KotlincDownloadProgress(0L, 0L, "Starting...")
-                                            scope.launch {
-                                                val (_, msg) = SdkEngineManager.downloadKotlincPack(
-                                                    context = context,
-                                                    isCancelled = { cancelFlag.get() },
-                                                    onProgress = { p -> kotlincProgress = p }
-                                                )
-                                                kotlincProgress = null
-                                                refreshTick++
-                                                Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
-                                            }
-                                        },
-                                        enabled = !isBusy,
-                                        colors = ButtonDefaults.buttonColors(containerColor = NeonLime, contentColor = Color.Black),
-                                        shape = RoundedCornerShape(9.dp),
-                                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
-                                        modifier = Modifier.height(32.dp)
-                                    ) {
-                                        Icon(Icons.Outlined.CloudDownload, contentDescription = null, modifier = Modifier.size(14.dp))
-                                        Spacer(modifier = Modifier.width(4.dp))
-                                        Text("Get", fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                                    }
-                                }
-                            }
-
-                            if (kotlincProgress != null) {
-                                val kp = kotlincProgress!!
-                                Spacer(modifier = Modifier.height(8.dp))
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Text(
-                                        text = kp.phase,
-                                        color = NeonLime,
-                                        fontSize = 10.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        modifier = Modifier.weight(1f)
-                                    )
-                                    Text(
-                                        text = "Cancel",
-                                        color = Color(0xFFFF5252),
-                                        fontSize = 10.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        modifier = Modifier
-                                            .clip(RoundedCornerShape(6.dp))
-                                            .clickable { cancelFlag.set(true) }
-                                            .padding(horizontal = 6.dp, vertical = 2.dp)
-                                    )
-                                }
-                                Spacer(modifier = Modifier.height(4.dp))
-                                if (kp.totalBytes > 0L) {
-                                    val frac = (kp.downloadedBytes.toFloat() / kp.totalBytes.toFloat()).coerceIn(0f, 1f)
-                                    LinearProgressIndicator(
-                                        progress = { frac },
-                                        color = NeonLime,
-                                        trackColor = Color(0xFF2B2D35),
-                                        modifier = Modifier.fillMaxWidth().height(6.dp).clip(CircleShape)
-                                    )
-                                    Spacer(modifier = Modifier.height(3.dp))
-                                    Text(
-                                        text = "${(frac * 100).toInt()}% (${formatSize(kp.downloadedBytes)} / ${formatSize(kp.totalBytes)})",
-                                        color = Color.LightGray,
-                                        fontSize = 9.sp,
-                                        fontFamily = FontFamily.Monospace
-                                    )
-                                } else {
-                                    LinearProgressIndicator(
-                                        color = NeonLime,
-                                        trackColor = Color(0xFF2B2D35),
-                                        modifier = Modifier.fillMaxWidth().height(6.dp).clip(CircleShape)
+                                        fontFamily = FontFamily.Monospace,
+                                        maxLines = 1,
+                                        softWrap = false
                                     )
                                 }
                             }
 
                             Spacer(modifier = Modifier.height(8.dp))
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                OutlinedButton(
-                                    onClick = { kotlincImportLauncher.launch(arrayOf("application/zip", "*/*")) },
-                                    enabled = !isBusy,
-                                    border = BorderStroke(1.dp, Color(0xFFA855F7).copy(alpha = 0.5f)),
-                                    shape = RoundedCornerShape(9.dp),
-                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
-                                    modifier = Modifier.weight(1f).height(34.dp)
-                                ) {
-                                    if (isImportingKotlinc) {
-                                        CircularProgressIndicator(color = Color(0xFFD8B4FE), strokeWidth = 2.dp, modifier = Modifier.size(13.dp))
-                                        Spacer(modifier = Modifier.width(5.dp))
-                                        Text("Importing...", color = Color(0xFFD8B4FE), fontSize = 10.sp)
-                                    } else {
-                                        Icon(Icons.Outlined.Folder, contentDescription = null, tint = Color(0xFFD8B4FE), modifier = Modifier.size(13.dp))
-                                        Spacer(modifier = Modifier.width(5.dp))
-                                        Text("Import Pack ZIP", color = Color(0xFFD8B4FE), fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                                    }
-                                }
-                                OutlinedButton(
-                                    onClick = { showKotlincUrlDialog = true },
-                                    enabled = !isBusy,
-                                    border = BorderStroke(1.dp, Color.White.copy(alpha = 0.16f)),
-                                    shape = RoundedCornerShape(9.dp),
-                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
-                                    modifier = Modifier.height(34.dp)
-                                ) {
-                                    Icon(Icons.Outlined.Link, contentDescription = null, tint = Color.LightGray, modifier = Modifier.size(13.dp))
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Text("Pack URL", color = Color.LightGray, fontSize = 11.sp, fontWeight = FontWeight.Medium)
-                                }
+
+                            Text(
+                                text = if (aaptReady) {
+                                    "Built-in ARM64 toolchain runs directly on device without Gradle daemon."
+                                } else {
+                                    aapt2Status?.message ?: "Checking AAPT2 binary..."
+                                },
+                                color = Color.LightGray,
+                                fontSize = 11.sp,
+                                lineHeight = 15.sp
+                            )
+
+                            Spacer(modifier = Modifier.height(10.dp))
+
+                            // ক্যাপাবিলিটি চিপস (১ লাইনে ক্লিন হরাইজন্টাল স্ক্রল)
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .horizontalScroll(rememberScrollState()),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                CapabilityChip("AAPT2", aaptReady)
+                                CapabilityChip("Kotlin ${kSt?.kotlinVersion ?: "2.4.21"}", kSt?.isInstalled == true || hasBundledOffline)
+                                CapabilityChip("Compose IR", kSt?.composePluginAvailable == true || hasBundledOffline)
+                                CapabilityChip("Serialization", kSt?.serializationAvailable == true || hasBundledOffline)
+                                CapabilityChip("Parcelize", kSt?.parcelizeAvailable == true || hasBundledOffline)
+                                CapabilityChip("SDK ${installedApis.firstOrNull() ?: recommendedApi}", installedApis.isNotEmpty() || hasBundledOffline)
+                                CapabilityChip("D8 / R8", true)
                             }
                         }
                     }
 
-                    // ================= ৩. Custom Release Signing Keystore Card =================
+                    // ================= ২. Performance & Low Memory Mode (CodeAssist Style) =================
+                    item {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(Color(0xFF1A1B22))
+                                .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(14.dp))
+                                .clickable {
+                                    val next = !lowMemoryMode
+                                    lowMemoryMode = next
+                                    SdkEngineManager.setLowMemoryMode(context, next)
+                                }
+                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.Memory,
+                                contentDescription = null,
+                                tint = if (lowMemoryMode) Color(0xFFFFB020) else NeonLime,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("Low Memory Mode", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                Text(
+                                    text = if (lowMemoryMode) {
+                                        "1-Core Sequential Dexing (Saves RAM)"
+                                    } else {
+                                        "4-Core Parallel Pre-Dexing (Fastest)"
+                                    },
+                                    color = TextSecondary,
+                                    fontSize = 10.sp
+                                )
+                            }
+                            Switch(
+                                checked = lowMemoryMode,
+                                onCheckedChange = {
+                                    lowMemoryMode = it
+                                    SdkEngineManager.setLowMemoryMode(context, it)
+                                },
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = Color.Black,
+                                    checkedTrackColor = Color(0xFFFFB020),
+                                    uncheckedThumbColor = Color.White,
+                                    uncheckedTrackColor = Color(0xFF2D2F3A)
+                                )
+                            )
+                        }
+                    }
+
+                    // ================= ৩. Release Signing Keystore Card =================
                     item {
                         Column(
                             modifier = Modifier
@@ -475,7 +380,7 @@ fun EngineManagerDialog(
                                         text = if (savedKeystore != null) {
                                             "Active: ${savedKeystore!!.keystoreFile.name} (alias: ${savedKeystore!!.keyAlias})"
                                         } else {
-                                            "Optional: Generate or import .p12/.jks for Release APK signing"
+                                            "Optional: Generate or import .p12/.jks for Release builds"
                                         },
                                         color = if (savedKeystore != null) NeonLime else TextSecondary,
                                         fontSize = 10.sp,
@@ -530,227 +435,7 @@ fun EngineManagerDialog(
                         }
                     }
 
-                    // ================= ৪. কাস্টম android.jar ইমপোর্ট কার্ড =================
-                    item {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(14.dp))
-                                .background(Color(0xFF1A1B22))
-                                .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(14.dp))
-                                .padding(12.dp)
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(
-                                    text = "ANDROID SDK PLATFORMS (android.jar)",
-                                    color = TextSecondary,
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    letterSpacing = 0.6.sp,
-                                    modifier = Modifier.weight(1f)
-                                )
-                                Text(
-                                    text = if (installedApis.isNotEmpty()) "${installedApis.size} installed" else "Auto-Pilot",
-                                    color = if (installedApis.isNotEmpty()) NeonLime else Color(0xFF58A6FF),
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Text(
-                                text = "Missing SDK platforms download automatically on first build.",
-                                color = TextSecondary,
-                                fontSize = 10.sp
-                            )
-                            Spacer(modifier = Modifier.height(8.dp))
-                            OutlinedButton(
-                                onClick = {
-                                    pendingImportApi = recommendedApi.coerceIn(30, 37)
-                                    importPickerLauncher.launch(arrayOf("application/java-archive", "application/zip", "*/*"))
-                                },
-                                enabled = !isBusy,
-                                border = BorderStroke(1.dp, NeonLime.copy(alpha = 0.45f)),
-                                shape = RoundedCornerShape(10.dp),
-                                modifier = Modifier.fillMaxWidth().height(38.dp)
-                            ) {
-                                if (isImporting) {
-                                    CircularProgressIndicator(color = NeonLime, strokeWidth = 2.dp, modifier = Modifier.size(15.dp))
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text("Importing...", color = NeonLime, fontSize = 11.sp)
-                                } else {
-                                    Icon(Icons.Outlined.Folder, contentDescription = null, tint = NeonLime, modifier = Modifier.size(15.dp))
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text("Import android.jar or platform.zip (API $recommendedApi)", color = NeonLime, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                                }
-                            }
-                        }
-                    }
-
-                    // ================= ৫. SDK ডাউনলোড প্রোগ্রেস কার্ড =================
-                    if (downloadProgress != null) {
-                        val dp = downloadProgress!!
-                        item {
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(14.dp))
-                                    .background(Color(0xFF1F231A))
-                                    .border(1.dp, NeonLime.copy(alpha = 0.6f), RoundedCornerShape(14.dp))
-                                    .padding(12.dp)
-                            ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Text(
-                                        text = "Downloading API ${dp.apiLevel}...",
-                                        color = NeonLime,
-                                        fontSize = 12.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        modifier = Modifier.weight(1f)
-                                    )
-                                    Text(
-                                        text = "Cancel",
-                                        color = Color(0xFFFF5252),
-                                        fontSize = 11.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        modifier = Modifier
-                                            .clip(RoundedCornerShape(6.dp))
-                                            .clickable { cancelFlag.set(true) }
-                                            .padding(horizontal = 8.dp, vertical = 3.dp)
-                                    )
-                                }
-                                Spacer(modifier = Modifier.height(6.dp))
-                                if (dp.totalBytes > 0L) {
-                                    val frac = (dp.downloadedBytes.toFloat() / dp.totalBytes.toFloat()).coerceIn(0f, 1f)
-                                    LinearProgressIndicator(
-                                        progress = { frac },
-                                        color = NeonLime,
-                                        trackColor = Color(0xFF2B2D35),
-                                        modifier = Modifier.fillMaxWidth().height(7.dp).clip(CircleShape)
-                                    )
-                                    Spacer(modifier = Modifier.height(5.dp))
-                                    Text(
-                                        text = "${dp.phase} • ${(frac * 100).toInt()}% (${formatSize(dp.downloadedBytes)} / ${formatSize(dp.totalBytes)})",
-                                        color = Color.LightGray,
-                                        fontSize = 10.sp,
-                                        fontFamily = FontFamily.Monospace
-                                    )
-                                } else {
-                                    LinearProgressIndicator(
-                                        color = NeonLime,
-                                        trackColor = Color(0xFF2B2D35),
-                                        modifier = Modifier.fillMaxWidth().height(7.dp).clip(CircleShape)
-                                    )
-                                    Spacer(modifier = Modifier.height(5.dp))
-                                    Text(
-                                        text = "${dp.phase} (${formatSize(dp.downloadedBytes)})",
-                                        color = Color.LightGray,
-                                        fontSize = 10.sp,
-                                        fontFamily = FontFamily.Monospace
-                                    )
-                                }
-                            }
-                        }
-                    }
-
-                    // ================= ৬. প্ল্যাটফর্ম SDK লিস্ট =================
-                    items(SdkEngineManager.SUPPORTED_PLATFORMS, key = { it.apiLevel }) { spec ->
-                        val isInstalled = spec.apiLevel in installedApis
-                        val isRecommended = spec.apiLevel == recommendedApi
-                        val isDownloadingThis = downloadProgress?.apiLevel == spec.apiLevel
-
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(if (isInstalled) NeonLime.copy(alpha = 0.08f) else Color(0xFF1A1B22))
-                                .border(
-                                    1.dp,
-                                    if (isInstalled) NeonLime.copy(alpha = 0.45f)
-                                    else if (isRecommended) Color(0xFF58A6FF).copy(alpha = 0.4f)
-                                    else Color.White.copy(alpha = 0.08f),
-                                    RoundedCornerShape(12.dp)
-                                )
-                                .padding(horizontal = 12.dp, vertical = 10.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Text(
-                                        text = spec.title,
-                                        color = if (isInstalled) NeonLime else Color.White,
-                                        fontSize = 13.sp,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                    if (isRecommended) {
-                                        Spacer(modifier = Modifier.width(6.dp))
-                                        Box(
-                                            modifier = Modifier
-                                                .clip(RoundedCornerShape(4.dp))
-                                                .background(Color(0xFF58A6FF).copy(alpha = 0.2f))
-                                                .padding(horizontal = 5.dp, vertical = 1.dp)
-                                        ) {
-                                            Text("PROJECT", color = Color(0xFF58A6FF), fontSize = 8.sp, fontWeight = FontWeight.Bold)
-                                        }
-                                    }
-                                }
-                                Text(
-                                    text = if (isInstalled) {
-                                        val size = SdkEngineManager.getAndroidJarFile(context, spec.apiLevel).length()
-                                        "${spec.subtitle} • Installed (${formatSize(size)})"
-                                    } else spec.subtitle,
-                                    color = TextSecondary,
-                                    fontSize = 10.sp,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            }
-
-                            if (isInstalled) {
-                                IconButton(
-                                    onClick = {
-                                        SdkEngineManager.deletePlatform(context, spec.apiLevel)
-                                        refreshTick++
-                                        Toast.makeText(context, "Removed API ${spec.apiLevel}", Toast.LENGTH_SHORT).show()
-                                    },
-                                    enabled = !isBusy,
-                                    modifier = Modifier.size(32.dp)
-                                ) {
-                                    Icon(Icons.Default.Delete, contentDescription = "Delete", tint = Color(0xFFFF5252), modifier = Modifier.size(17.dp))
-                                }
-                            } else {
-                                Button(
-                                    onClick = {
-                                        cancelFlag.set(false)
-                                        downloadProgress = SdkDownloadProgress(spec.apiLevel, 0L, 0L, "Starting...")
-                                        scope.launch {
-                                            val (_, msg) = SdkEngineManager.downloadPlatformSdk(
-                                                context = context,
-                                                spec = spec,
-                                                isCancelled = { cancelFlag.get() },
-                                                onProgress = { p -> downloadProgress = p }
-                                            )
-                                            downloadProgress = null
-                                            refreshTick++
-                                            Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
-                                        }
-                                    },
-                                    enabled = !isBusy,
-                                    colors = ButtonDefaults.buttonColors(
-                                        containerColor = if (isDownloadingThis) Color(0xFF282830) else NeonLime,
-                                        contentColor = Color.Black
-                                    ),
-                                    shape = RoundedCornerShape(9.dp),
-                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
-                                    modifier = Modifier.height(32.dp)
-                                ) {
-                                    Icon(Icons.Outlined.CloudDownload, contentDescription = null, modifier = Modifier.size(14.dp))
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Text("Get", fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                                }
-                            }
-                        }
-                    }
-
-                    // ================= ৭. ক্যাশ ম্যানেজার কার্ড =================
+                    // ================= ৪. ক্যাশ ম্যানেজার কার্ড =================
                     item {
                         Row(
                             modifier = Modifier
@@ -762,9 +447,9 @@ fun EngineManagerDialog(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
-                                Text("Maven & Dex Caches", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                Text("Prebuilt Dex & Maven Caches", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                                 Text(
-                                    text = "Total: ${formatSize(cacheStats.totalBytes)} (Maven ${formatSize(cacheStats.mavenRepoBytes)}, ExtDex ${formatSize(cacheStats.extDexBytes)})",
+                                    text = "Total: ${formatSize(cacheStats.totalBytes)} (Maven ${formatSize(cacheStats.mavenRepoBytes)}, Pre-Dex ${formatSize(cacheStats.extDexBytes)})",
                                     color = TextSecondary,
                                     fontSize = 10.sp
                                 )
@@ -786,6 +471,171 @@ fun EngineManagerDialog(
                                 Icon(Icons.Outlined.DeleteSweep, contentDescription = null, tint = Color(0xFFFF8A80), modifier = Modifier.size(14.dp))
                                 Spacer(modifier = Modifier.width(4.dp))
                                 Text("Clear", color = Color(0xFFFF8A80), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+
+                    // ================= ৫. কোলাপ্সড Advanced Platforms সেকশন =================
+                    item {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(Color(0xFF17181E))
+                                .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(14.dp))
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { showAdvancedSdk = !showAdvancedSdk }
+                                    .padding(horizontal = 12.dp, vertical = 11.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(Icons.Outlined.Tune, contentDescription = null, tint = TextSecondary, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text("Advanced: Additional SDKs & Custom Pack", color = Color.LightGray, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                                    Text(
+                                        text = "Installed APIs: ${if (installedApis.isEmpty()) "Built-in API 36" else installedApis.joinToString(", ")}",
+                                        color = TextSecondary,
+                                        fontSize = 9.sp
+                                    )
+                                }
+                                Icon(
+                                    imageVector = if (showAdvancedSdk) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                                    contentDescription = null,
+                                    tint = Color.Gray,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+
+                            AnimatedVisibility(visible = showAdvancedSdk) {
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(start = 12.dp, end = 12.dp, bottom = 12.dp),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    HorizontalDivider(color = Color.White.copy(alpha = 0.06f))
+
+                                    if (downloadProgress != null) {
+                                        val dp = downloadProgress!!
+                                        Column(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .clip(RoundedCornerShape(10.dp))
+                                                .background(Color(0xFF1F231A))
+                                                .border(1.dp, NeonLime.copy(alpha = 0.5f), RoundedCornerShape(10.dp))
+                                                .padding(10.dp)
+                                        ) {
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Text("Downloading API ${dp.apiLevel}...", color = NeonLime, fontSize = 11.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                                                Text(
+                                                    "Cancel",
+                                                    color = Color(0xFFFF5252),
+                                                    fontSize = 10.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    modifier = Modifier.clickable { cancelFlag.set(true) }
+                                                )
+                                            }
+                                            Spacer(modifier = Modifier.height(5.dp))
+                                            if (dp.totalBytes > 0L) {
+                                                val frac = (dp.downloadedBytes.toFloat() / dp.totalBytes.toFloat()).coerceIn(0f, 1f)
+                                                LinearProgressIndicator(progress = { frac }, color = NeonLime, trackColor = Color(0xFF2B2D35), modifier = Modifier.fillMaxWidth().height(5.dp).clip(CircleShape))
+                                            } else {
+                                                LinearProgressIndicator(color = NeonLime, trackColor = Color(0xFF2B2D35), modifier = Modifier.fillMaxWidth().height(5.dp).clip(CircleShape))
+                                            }
+                                        }
+                                    }
+
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        OutlinedButton(
+                                            onClick = {
+                                                pendingImportApi = recommendedApi.coerceIn(30, 37)
+                                                importPickerLauncher.launch(arrayOf("application/java-archive", "application/zip", "*/*"))
+                                            },
+                                            enabled = !isBusy,
+                                            border = BorderStroke(1.dp, NeonLime.copy(alpha = 0.4f)),
+                                            shape = RoundedCornerShape(9.dp),
+                                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                                            modifier = Modifier.weight(1f).height(34.dp)
+                                        ) {
+                                            Text("Import android.jar", color = NeonLime, fontSize = 10.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+                                        }
+                                        OutlinedButton(
+                                            onClick = { kotlincImportLauncher.launch(arrayOf("application/zip", "*/*")) },
+                                            enabled = !isBusy,
+                                            border = BorderStroke(1.dp, Color(0xFFA855F7).copy(alpha = 0.45f)),
+                                            shape = RoundedCornerShape(9.dp),
+                                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                                            modifier = Modifier.weight(1f).height(34.dp)
+                                        ) {
+                                            Text("Import Compiler ZIP", color = Color(0xFFD8B4FE), fontSize = 10.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+                                        }
+                                    }
+
+                                    SdkEngineManager.SUPPORTED_PLATFORMS.forEach { spec ->
+                                        val isInstalled = spec.apiLevel in installedApis
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .clip(RoundedCornerShape(10.dp))
+                                                .background(if (isInstalled) NeonLime.copy(alpha = 0.08f) else Color(0xFF1F2028))
+                                                .padding(horizontal = 10.dp, vertical = 8.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Text(spec.title, color = if (isInstalled) NeonLime else Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                                Text(
+                                                    text = if (isInstalled) {
+                                                        "Installed (${formatSize(SdkEngineManager.getAndroidJarFile(context, spec.apiLevel).length())})"
+                                                    } else spec.subtitle,
+                                                    color = TextSecondary,
+                                                    fontSize = 9.sp
+                                                )
+                                            }
+                                            if (isInstalled) {
+                                                IconButton(
+                                                    onClick = {
+                                                        SdkEngineManager.deletePlatform(context, spec.apiLevel)
+                                                        refreshTick++
+                                                    },
+                                                    enabled = !isBusy,
+                                                    modifier = Modifier.size(28.dp)
+                                                ) {
+                                                    Icon(Icons.Default.Delete, contentDescription = "Delete", tint = Color(0xFFFF5252), modifier = Modifier.size(15.dp))
+                                                }
+                                            } else {
+                                                Button(
+                                                    onClick = {
+                                                        cancelFlag.set(false)
+                                                        downloadProgress = SdkDownloadProgress(spec.apiLevel, 0L, 0L, "Starting...")
+                                                        scope.launch {
+                                                            val (_, msg) = SdkEngineManager.downloadPlatformSdk(
+                                                                context = context,
+                                                                spec = spec,
+                                                                isCancelled = { cancelFlag.get() },
+                                                                onProgress = { p -> downloadProgress = p }
+                                                            )
+                                                            downloadProgress = null
+                                                            refreshTick++
+                                                            Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+                                                        }
+                                                    },
+                                                    enabled = !isBusy,
+                                                    colors = ButtonDefaults.buttonColors(containerColor = NeonLime, contentColor = Color.Black),
+                                                    shape = RoundedCornerShape(7.dp),
+                                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
+                                                    modifier = Modifier.height(28.dp)
+                                                ) {
+                                                    Icon(Icons.Outlined.CloudDownload, contentDescription = null, modifier = Modifier.size(12.dp))
+                                                    Spacer(modifier = Modifier.width(4.dp))
+                                                    Text("Get", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -814,7 +664,7 @@ fun EngineManagerDialog(
                                 onDismiss()
                                 onReadyToBuild()
                             },
-                            enabled = canBuildAutoPilot && !isBusy,
+                            enabled = aaptReady && !isBusy,
                             colors = ButtonDefaults.buttonColors(containerColor = NeonLime, contentColor = Color.Black),
                             shape = RoundedCornerShape(12.dp),
                             modifier = Modifier.weight(1.3f).height(44.dp)
@@ -829,64 +679,7 @@ fun EngineManagerDialog(
         }
     }
 
-    // ================= ৮. Kotlin Pack Custom URL ডায়ালগ =================
-    if (showKotlincUrlDialog) {
-        var packUrl by remember { mutableStateOf(SdkEngineManager.getKotlincPackUrl(context)) }
-        Dialog(onDismissRequest = { showKotlincUrlDialog = false }) {
-            Surface(
-                shape = RoundedCornerShape(20.dp),
-                color = Color(0xFF16171D),
-                border = BorderStroke(1.dp, Color(0xFFA855F7).copy(alpha = 0.5f)),
-                modifier = Modifier.fillMaxWidth(0.92f)
-            ) {
-                Column(modifier = Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text("Kotlin + Compose Pack URL", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold)
-                    Text(
-                        text = "Direct download link to kotlinc-compose-pack.zip (automatically used on first Kotlin build).",
-                        color = TextSecondary,
-                        fontSize = 11.sp
-                    )
-                    OutlinedTextField(
-                        value = packUrl,
-                        onValueChange = { packUrl = it },
-                        label = { Text("Download URL", fontSize = 11.sp) },
-                        maxLines = 3,
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedContainerColor = SurfaceDark,
-                            unfocusedContainerColor = SurfaceDark,
-                            focusedTextColor = Color.White,
-                            unfocusedTextColor = Color.White,
-                            focusedBorderColor = NeonLime
-                        ),
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        TextButton(
-                            onClick = { packUrl = SdkEngineManager.DEFAULT_KOTLINC_PACK_URL },
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Text("Reset Default", color = Color(0xFF58A6FF), fontSize = 11.sp)
-                        }
-                        Button(
-                            onClick = { showKotlincUrlDialog = false },
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF26262E), contentColor = Color.White)
-                        ) { Text("Cancel", fontSize = 11.sp) }
-                        Button(
-                            onClick = {
-                                SdkEngineManager.saveKotlincPackUrl(context, packUrl)
-                                showKotlincUrlDialog = false
-                                refreshTick++
-                                Toast.makeText(context, "Compiler Pack URL saved!", Toast.LENGTH_SHORT).show()
-                            },
-                            colors = ButtonDefaults.buttonColors(containerColor = NeonLime, contentColor = Color.Black)
-                        ) { Text("Save", fontWeight = FontWeight.Bold, fontSize = 11.sp) }
-                    }
-                }
-            }
-        }
-    }
-
-    // ================= ৯. Create Keystore ডায়ালগ =================
+    // ================= Create Keystore ডায়ালগ =================
     if (showCreateKeystoreDialog) {
         var fileName by remember { mutableStateOf("release_key") }
         var alias by remember { mutableStateOf("key0") }
@@ -977,7 +770,7 @@ fun EngineManagerDialog(
         }
     }
 
-    // ================= ১০. Imported Keystore Credentials ডায়ালগ =================
+    // ================= Imported Keystore Credentials ডায়ালগ =================
     if (importedKeystoreFile != null) {
         val ksFile = importedKeystoreFile!!
         var alias by remember { mutableStateOf("key0") }
@@ -1047,5 +840,37 @@ fun EngineManagerDialog(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun CapabilityChip(
+    label: String,
+    active: Boolean
+) {
+    val bg = if (active) NeonLime.copy(alpha = 0.14f) else Color(0xFF252630)
+    val border = if (active) NeonLime.copy(alpha = 0.45f) else Color.White.copy(alpha = 0.12f)
+    val txtColor = if (active) NeonLime else TextSecondary
+    Row(
+        modifier = Modifier
+            .clip(RoundedCornerShape(6.dp))
+            .background(bg)
+            .border(0.7.dp, border, RoundedCornerShape(6.dp))
+            .padding(horizontal = 7.dp, vertical = 3.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        if (active) {
+            Icon(Icons.Default.Check, contentDescription = null, tint = NeonLime, modifier = Modifier.size(10.dp))
+            Spacer(modifier = Modifier.width(3.dp))
+        }
+        Text(
+            text = label,
+            color = txtColor,
+            fontSize = 9.sp,
+            fontWeight = FontWeight.Bold,
+            fontFamily = FontFamily.Monospace,
+            maxLines = 1,
+            softWrap = false
+        )
     }
 }

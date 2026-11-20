@@ -138,7 +138,7 @@ class CompilerWorkerService : Service() {
 // ================= ২. সম্পূর্ণ Gradle-মুক্ত Zero-Setup DAG বিল্ড অর্কেস্ট্রেটর =================
 object NativeBuildOrchestrator {
 
-    private const val ENGINE_REVISION = "rev5"
+    private const val ENGINE_REVISION = "rev6"
 
     suspend fun runBuild(
         context: Context,
@@ -249,7 +249,7 @@ object NativeBuildOrchestrator {
         onLog: (String) -> Unit
     ): NativeBuildSummary = withContext(Dispatchers.IO) {
         val startMs = System.currentTimeMillis()
-        onLog("CodeStudio Native Engine (${request.variant.label}) [Zero-Setup Auto-Pilot]")
+        onLog("CodeStudio Native Engine (${request.variant.label}) [Offline Auto-Pilot]")
 
         val projectModel = DeclarativeProjectParser.parseProject(context, request.projectName)
         val appMod = projectModel.appModule
@@ -282,7 +282,7 @@ object NativeBuildOrchestrator {
             )
         }
 
-        // ================= Zero-Setup ১: স্বয়ংক্রিয় Android SDK নিশ্চিতকরণ =================
+        // ================= Zero-Setup ১: বান্ডেল্ড বা অনলাইন Android SDK নিশ্চিতকরণ =================
         var androidJar = Aapt2ResourcePipeline.resolveAndroidJar(context, appMod.compileSdk)
         if (androidJar == null || !androidJar.exists()) {
             androidJar = SdkEngineManager.autoEnsureAndroidJar(
@@ -303,7 +303,7 @@ object NativeBuildOrchestrator {
         }
 
         if (androidJar == null || !androidJar.exists()) {
-            val msg = "Could not setup Android SDK Platform. Please verify your internet connection for first-time SDK setup."
+            val msg = "Could not setup Android SDK Platform. Please check your internet connection or Build Runtime settings."
             onLog("ERROR: $msg")
             return@withContext NativeBuildSummary(
                 success = false,
@@ -312,7 +312,7 @@ object NativeBuildOrchestrator {
             )
         }
 
-        // ================= Zero-Setup ২: Kotlin সোর্স থাকলে স্বয়ংক্রিয় Kotlin+Compose Pack নিশ্চিতকরণ =================
+        // ================= Zero-Setup ২: Kotlin সোর্স থাকলে বান্ডেল্ড Kotlin+Compose Pack নিশ্চিতকরণ =================
         val needsKotlin = KotlinNativeCompiler.hasKotlinSources(appMod, extraSourceDirs)
         if (needsKotlin && !SdkEngineManager.isKotlincInstalled(context)) {
             val (ok, packMsg) = SdkEngineManager.autoEnsureKotlincPack(
@@ -340,7 +340,13 @@ object NativeBuildOrchestrator {
         }
 
         val engineModeStr = if (needsKotlin) {
-            if (appMod.composeEnabled) "Kotlin+Compose+Java" else "Kotlin+Java"
+            buildList {
+                add("Kotlin")
+                if (appMod.composeEnabled) add("Compose")
+                if (appMod.serializationEnabled) add("Serialization")
+                if (appMod.parcelizeEnabled) add("Parcelize")
+                add("Java")
+            }.joinToString("+")
         } else {
             "Java"
         }
@@ -378,16 +384,13 @@ object NativeBuildOrchestrator {
 
         val allDiagnostics = ArrayList<BuildDiagnosticItem>()
 
-        fun resolveExtraKotlinRuntimeJars(): List<File> {
-            if (!needsKotlin) return emptyList()
-            val hasStdlib = resolvedDeps.allJars.any {
-                val n = it.name.lowercase()
-                n.startsWith("kotlin-stdlib") && !n.startsWith("kotlin-stdlib-common")
-            }
-            if (hasStdlib) return emptyList()
-            val bundled = SdkEngineManager.getBundledKotlinStdlibJar(context)
-            return if (bundled.exists() && bundled.length() > 0L) listOf(bundled) else emptyList()
-        }
+        fun resolveExtraKotlinRuntimeJars(): List<File> =
+            KotlinNativeCompiler.resolveBundledRuntimeJars(
+                context = context,
+                module = appMod,
+                classpathJars = resolvedDeps.allJars,
+                hasKotlin = needsKotlin
+            )
 
         val tasks = listOf(
             TaskNode(
@@ -446,7 +449,12 @@ object NativeBuildOrchestrator {
                 id = "aapt2Resources",
                 displayName = ":app:process${request.variant.label}Resources",
                 dependencies = listOf("mergeManifest"),
-                inputFiles = { appMod.resDirs + appMod.assetsDirs + extraModules.flatMap { it.resDirs + it.assetsDirs } + listOf(mergedManifest) },
+                inputFiles = {
+                    appMod.resDirs +
+                        appMod.assetsDirs +
+                        extraModules.flatMap { it.resDirs + it.assetsDirs } +
+                        listOfNotNull(mergedManifest, appMod.googleServicesFile)
+                },
                 inputStrings = {
                     listOf(
                         ENGINE_REVISION,
@@ -497,6 +505,8 @@ object NativeBuildOrchestrator {
                         appMod.javaVersion.toString(),
                         appMod.compileSdk.toString(),
                         appMod.composeEnabled.toString(),
+                        appMod.serializationEnabled.toString(),
+                        appMod.parcelizeEnabled.toString(),
                         request.variant.name
                     )
                 },

@@ -1,6 +1,8 @@
 package com.shd.codestudio.nativeengine
 
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.net.Uri
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -51,6 +53,8 @@ data class KotlincPackStatus(
     val isInstalled: Boolean,
     val kotlinVersion: String,
     val composePluginAvailable: Boolean,
+    val serializationAvailable: Boolean,
+    val parcelizeAvailable: Boolean,
     val stdlibAvailable: Boolean,
     val totalSizeBytes: Long,
     val packSourceUrl: String
@@ -94,7 +98,13 @@ object SdkEngineManager {
 
     private const val PREFS_ENGINE = "CodeStudioEnginePrefs"
     private const val KEY_KOTLINC_PACK_URL = "kotlinc_pack_url"
-    private const val ASSET_KOTLINC_PACK = "kotlinc-compose-pack.zip"
+    private const val KEY_LOW_MEM_MODE = "low_memory_mode"
+
+    private const val ASSET_BUNDLE_DIR = "engine-bundle"
+    private const val ASSET_BUNDLED_ANDROID_36 = "engine-bundle/android-36.jar"
+    private const val ASSET_BUNDLED_KOTLINC_PACK = "engine-bundle/kotlinc-compose-pack.zip"
+    private const val ASSET_ROOT_KOTLINC_PACK = "kotlinc-compose-pack.zip"
+    private const val EXPECTED_PACK_FORMAT = "codestudio-kotlinc-pack-v3"
 
     const val DEFAULT_KOTLINC_PACK_URL =
         "https://github.com/sagirhossendhali1999-cyber/CodeStudio/releases/download/engine-kotlinc-latest/kotlinc-compose-pack.zip"
@@ -158,6 +168,38 @@ object SdkEngineManager {
         )
     )
 
+    // ================= ০. Build Runtime সেটিংস (Low Memory Mode ইত্যাদি) =================
+    fun isLowMemoryMode(context: Context): Boolean {
+        val prefs = context.getSharedPreferences(PREFS_ENGINE, Context.MODE_PRIVATE)
+        return prefs.getBoolean(KEY_LOW_MEM_MODE, false)
+    }
+
+    fun setLowMemoryMode(context: Context, enabled: Boolean) {
+        val prefs = context.getSharedPreferences(PREFS_ENGINE, Context.MODE_PRIVATE)
+        prefs.edit().putBoolean(KEY_LOW_MEM_MODE, enabled).apply()
+    }
+
+    fun hasBundledEngineAssets(context: Context): Boolean {
+        return hasAsset(context, ASSET_BUNDLED_KOTLINC_PACK) || hasAsset(context, ASSET_BUNDLED_ANDROID_36)
+    }
+
+    private fun hasAsset(context: Context, assetPath: String): Boolean {
+        val dir = assetPath.substringBeforeLast("/", "")
+        val name = assetPath.substringAfterLast("/")
+        return runCatching {
+            context.assets.list(dir)?.contains(name) == true
+        }.getOrDefault(false)
+    }
+
+    private fun isNetworkConnected(context: Context): Boolean {
+        return runCatching {
+            val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return false
+            val net = cm.activeNetwork ?: return false
+            val caps = cm.getNetworkCapabilities(net) ?: return false
+            caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+        }.getOrDefault(false)
+    }
+
     // ================= ১. Android Platform SDK ম্যানেজমেন্ট =================
     fun getPlatformsDir(context: Context): File =
         File(context.filesDir, "CodeStudioEngine/android-sdk/platforms").apply { if (!exists()) mkdirs() }
@@ -182,7 +224,37 @@ object SdkEngineManager {
             ?: emptyList()
     }
 
-    // স্বয়ংক্রিয় জিরো-সেটআপ: অ্যান্ড্রয়েড SDK নিশ্চিতকরণ
+    private fun extractBundledAndroid36(context: Context): File? {
+        if (!hasAsset(context, ASSET_BUNDLED_ANDROID_36)) return null
+        val targetJar = getAndroidJarFile(context, 36)
+        if (targetJar.exists() && targetJar.length() > 100_000L) return targetJar
+
+        targetJar.parentFile?.mkdirs()
+        val tmpJar = File(targetJar.parentFile, "android.jar.tmp")
+        return try {
+            context.assets.open(ASSET_BUNDLED_ANDROID_36).use { input ->
+                BufferedOutputStream(FileOutputStream(tmpJar), 65_536).use { bos ->
+                    input.copyTo(bos)
+                }
+            }
+            if (tmpJar.exists() && tmpJar.length() > 100_000L) {
+                if (targetJar.exists()) targetJar.delete()
+                if (!tmpJar.renameTo(targetJar)) {
+                    tmpJar.copyTo(targetJar, overwrite = true)
+                    tmpJar.delete()
+                }
+                targetJar
+            } else {
+                tmpJar.delete()
+                null
+            }
+        } catch (_: Exception) {
+            tmpJar.delete()
+            null
+        }
+    }
+
+    // স্বয়ংক্রিয় অফলাইন-ফার্স্ট জিরো-সেটআপ: অ্যান্ড্রয়েড SDK নিশ্চিতকরণ
     suspend fun autoEnsureAndroidJar(
         context: Context,
         targetApi: Int,
@@ -194,11 +266,22 @@ object SdkEngineManager {
             return@withContext existing
         }
 
+        // ১. যদি targetApi == 36 হয় অথবা অফলাইনে থাকি, APK-র ভেতরের বান্ডেল্ড android-36.jar তাৎক্ষণিক আনপ্যাক করা
+        if (hasAsset(context, ASSET_BUNDLED_ANDROID_36) && (targetApi == 36 || !isNetworkConnected(context))) {
+            onLog("[Auto-Pilot] Extracting built-in Android 16 (API 36) SDK offline...")
+            val bundled = extractBundledAndroid36(context)
+            if (bundled != null) {
+                onLog("[Auto-Pilot] Built-in Android SDK (API 36) ready!")
+                return@withContext bundled
+            }
+        }
+
+        // ২. অন্য API (যেমন 33/34/35/37) চাইলে অনলাইন থেকে নামানোর চেষ্টা, ব্যর্থ হলে বান্ডেল্ড 36 ফলব্যাক
         val spec = SUPPORTED_PLATFORMS.firstOrNull { it.apiLevel == targetApi }
             ?: SUPPORTED_PLATFORMS.firstOrNull { it.apiLevel == 36 }
             ?: SUPPORTED_PLATFORMS.first()
 
-        onLog("[Auto-Pilot] Setting up Android SDK Platform (${spec.title}) for first-time build...")
+        onLog("[Auto-Pilot] Setting up Android SDK Platform (${spec.title})...")
 
         var lastLoggedPct = -10
         val (ok, errMsg) = downloadPlatformSdk(
@@ -223,7 +306,12 @@ object SdkEngineManager {
                 return@withContext jar
             }
         } else {
-            onLog("[Auto-Pilot] WARN: SDK download issue: $errMsg")
+            onLog("[Auto-Pilot] WARN: Online SDK fetch failed ($errMsg), falling back to built-in SDK...")
+            val fallback = extractBundledAndroid36(context)
+            if (fallback != null) {
+                onLog("[Auto-Pilot] Using built-in Android 16 (API 36) SDK!")
+                return@withContext fallback
+            }
         }
 
         Aapt2ResourcePipeline.resolveAndroidJar(context, targetApi)
@@ -234,7 +322,7 @@ object SdkEngineManager {
         return if (dir.exists()) deleteRecursivelySafe(dir) else true
     }
 
-    // ================= ২. Zero-Setup Kotlin + Compose Compiler Pack ম্যানেজমেন্ট =================
+    // ================= ২. Offline + Auto-Pilot Kotlin Compiler Pack ম্যানেজমেন্ট =================
     fun getKotlincDir(context: Context): File =
         File(context.filesDir, "CodeStudioEngine/kotlinc").apply { if (!exists()) mkdirs() }
 
@@ -244,8 +332,17 @@ object SdkEngineManager {
     fun getComposePluginJar(context: Context): File =
         File(getKotlincDir(context), "plugins/compose-compiler.jar")
 
+    fun getSerializationPluginJar(context: Context): File =
+        File(getKotlincDir(context), "plugins/serialization-compiler.jar")
+
+    fun getParcelizePluginJar(context: Context): File =
+        File(getKotlincDir(context), "plugins/parcelize-compiler.jar")
+
     fun getBundledKotlinStdlibJar(context: Context): File =
         File(getKotlincDir(context), "stdlib/kotlin-stdlib.jar")
+
+    fun getBundledParcelizeRuntimeJar(context: Context): File =
+        File(getKotlincDir(context), "stdlib/kotlin-parcelize-runtime.jar")
 
     fun getKotlincPackUrl(context: Context): String {
         val prefs = context.getSharedPreferences(PREFS_ENGINE, Context.MODE_PRIVATE)
@@ -282,10 +379,22 @@ object SdkEngineManager {
         return !dexFiles.isNullOrEmpty()
     }
 
+    private fun isLatestPackFormatInstalled(context: Context): Boolean {
+        if (!isKotlincInstalled(context)) return false
+        val manifestFile = File(getKotlincDir(context), "manifest.json")
+        if (!manifestFile.exists()) return false
+        val fmt = runCatching {
+            JSONObject(manifestFile.readText(Charsets.UTF_8)).optString("format", "")
+        }.getOrDefault("")
+        return fmt == EXPECTED_PACK_FORMAT
+    }
+
     fun getKotlincPackStatus(context: Context): KotlincPackStatus {
         val root = getKotlincDir(context)
         val installed = isKotlincInstalled(context)
         val composeOk = getComposePluginJar(context).let { it.exists() && it.length() > 0L }
+        val serOk = getSerializationPluginJar(context).let { it.exists() && it.length() > 0L }
+        val parOk = getParcelizePluginJar(context).let { it.exists() && it.length() > 0L }
         val stdlibOk = getBundledKotlinStdlibJar(context).let { it.exists() && it.length() > 0L }
         val manifestFile = File(root, "manifest.json")
         val kotlinVer = if (manifestFile.exists()) {
@@ -298,6 +407,8 @@ object SdkEngineManager {
             isInstalled = installed,
             kotlinVersion = kotlinVer,
             composePluginAvailable = composeOk,
+            serializationAvailable = serOk,
+            parcelizeAvailable = parOk,
             stdlibAvailable = stdlibOk,
             totalSizeBytes = size,
             packSourceUrl = getKotlincPackUrl(context)
@@ -310,42 +421,78 @@ object SdkEngineManager {
         return if (dir.exists()) deleteRecursivelySafe(dir) else true
     }
 
-    // স্বয়ংক্রিয় জিরো-সেটআপ: Kotlin + Compose Compiler Pack নিশ্চিতকরণ
+    // একদম প্রথমবারই APK-র ভেতর থেকে অফলাইন ইঞ্জিন প্রিপেয়ার করা
+    suspend fun ensureBundledOfflineEngineReady(
+        context: Context,
+        onLog: (String) -> Unit = {}
+    ) = withContext(Dispatchers.IO) {
+        if (hasAsset(context, ASSET_BUNDLED_ANDROID_36) && !isPlatformInstalled(context, 36)) {
+            extractBundledAndroid36(context)
+        }
+        val bundledAssetPath = when {
+            hasAsset(context, ASSET_BUNDLED_KOTLINC_PACK) -> ASSET_BUNDLED_KOTLINC_PACK
+            hasAsset(context, ASSET_ROOT_KOTLINC_PACK) -> ASSET_ROOT_KOTLINC_PACK
+            else -> null
+        }
+        if (bundledAssetPath != null && !isLatestPackFormatInstalled(context)) {
+            extractKotlincFromAsset(context, bundledAssetPath, onLog)
+        }
+    }
+
+    private fun extractKotlincFromAsset(
+        context: Context,
+        assetPath: String,
+        onLog: (String) -> Unit
+    ): Pair<Boolean, String> {
+        onLog("[Auto-Pilot] Extracting built-in Kotlin + Compose + Plugins Pack (offline)...")
+        val tmpZip = File(context.cacheDir, "kotlinc_asset_tmp.zip")
+        return try {
+            context.assets.open(assetPath).use { input ->
+                BufferedOutputStream(FileOutputStream(tmpZip), 65_536).use { bos ->
+                    input.copyTo(bos)
+                }
+            }
+            val res = installKotlincPackFromZipFile(context, tmpZip)
+            tmpZip.delete()
+            if (res.first) {
+                onLog("[Auto-Pilot] Built-in Kotlin Compiler Pack ready!")
+            }
+            res
+        } catch (e: Exception) {
+            tmpZip.delete()
+            false to (e.message ?: "Asset extraction failed")
+        }
+    }
+
+    // স্বয়ংক্রিয় অফলাইন-ফার্স্ট জিরো-সেটআপ: Kotlin + Compose + Plugins নিশ্চিতকরণ
     suspend fun autoEnsureKotlincPack(
         context: Context,
         isCancelled: () -> Boolean = { false },
         onLog: (String) -> Unit = {}
     ): Pair<Boolean, String> = withContext(Dispatchers.IO) {
+        val bundledAssetPath = when {
+            hasAsset(context, ASSET_BUNDLED_KOTLINC_PACK) -> ASSET_BUNDLED_KOTLINC_PACK
+            hasAsset(context, ASSET_ROOT_KOTLINC_PACK) -> ASSET_ROOT_KOTLINC_PACK
+            else -> null
+        }
+
+        if (isKotlincInstalled(context)) {
+            if (bundledAssetPath == null || isLatestPackFormatInstalled(context)) {
+                return@withContext true to "Kotlin + Compose Compiler Pack ready."
+            }
+        }
+
+        // ১. APK-র ভেতরের অফলাইন বান্ডেল থেকে সাথে সাথে এক্সট্র্যাক্ট করা (০% ইন্টারনেট, ০% 404)
+        if (bundledAssetPath != null) {
+            val assetRes = extractKotlincFromAsset(context, bundledAssetPath, onLog)
+            if (assetRes.first) return@withContext assetRes
+        }
+
         if (isKotlincInstalled(context)) {
             return@withContext true to "Kotlin + Compose Compiler Pack ready."
         }
 
-        // ১. যদি অ্যাপের assets/-এ বান্ডেল করা থাকে, সম্পূর্ণ অফলাইনে এক্সট্র্যাক্ট করা
-        val hasBundledAsset = runCatching {
-            context.assets.list("")?.contains(ASSET_KOTLINC_PACK) == true
-        }.getOrDefault(false)
-
-        if (hasBundledAsset) {
-            onLog("[Auto-Pilot] Extracting built-in Kotlin + Compose Compiler Pack...")
-            val tmpZip = File(context.cacheDir, "kotlinc_asset_tmp.zip")
-            try {
-                context.assets.open(ASSET_KOTLINC_PACK).use { input ->
-                    BufferedOutputStream(FileOutputStream(tmpZip), 65_536).use { bos ->
-                        input.copyTo(bos)
-                    }
-                }
-                val res = installKotlincPackFromZipFile(context, tmpZip)
-                tmpZip.delete()
-                if (res.first) {
-                    onLog("[Auto-Pilot] Built-in Kotlin Compiler Pack ready!")
-                    return@withContext res
-                }
-            } catch (_: Exception) {
-                tmpZip.delete()
-            }
-        }
-
-        // ২. অটোমেটিক অন-ডিমান্ড ডাউনলোড
+        // ২. যদি APK-তে বান্ডেল না থাকে (যেমন লোকাল ডেভেলপমেন্ট), অন-ডিমান্ড ডাউনলোড ফলব্যাক
         onLog("[Auto-Pilot] Preparing Kotlin + Compose Compiler Pack (one-time setup)...")
         var lastLoggedPct = -15
         val (ok, msg) = downloadKotlincPack(
@@ -390,7 +537,7 @@ object SdkEngineManager {
 
             val code = conn.responseCode
             if (code !in 200..299) {
-                return@withContext false to "HTTP $code downloading Kotlin pack from $packUrl. Run 'Build Kotlin + Compose Engine Pack' GitHub workflow or import ZIP in Engine Manager."
+                return@withContext false to "HTTP $code downloading Kotlin pack from $packUrl."
             }
 
             val totalLen = conn.contentLengthLong.coerceAtLeast(0L)
@@ -516,7 +663,6 @@ object SdkEngineManager {
                 return false to "Invalid Kotlin pack: missing dex/kotlinc_core.zip inside archive."
             }
 
-            // Android 14+ (API 34+) security: ডেক্স ফাইল ও প্লাগইন read-only সেট করা
             effectiveStage.walkTopDown().forEach { f ->
                 if (f.isFile && (f.parentFile?.name in setOf("dex", "plugins", "stdlib"))) {
                     runCatching { f.setReadOnly() }

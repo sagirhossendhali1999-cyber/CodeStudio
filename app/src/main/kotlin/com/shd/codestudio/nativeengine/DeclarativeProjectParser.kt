@@ -283,6 +283,8 @@ object DeclarativeProjectParser {
         val clean = stripCommentsPreservingStrings(buildText)
         val manifestFile = File(moduleDir, "src/main/AndroidManifest.xml").takeIf { it.exists() }
         val manifestPackage = manifestFile?.let { readManifestPackageAttr(it) }
+        val googleServicesFile = File(moduleDir, "google-services.json").takeIf { it.exists() && it.isFile }
+            ?: File(moduleDir, "src/main/google-services.json").takeIf { it.exists() && it.isFile }
 
         val isApp = !clean.contains("com.android.library") &&
             !clean.contains("android.library") &&
@@ -317,6 +319,14 @@ object DeclarativeProjectParser {
             clean.contains("kotlin.compose") ||
             clean.contains("kotlin-compose") ||
             clean.contains("composeOptions")
+
+        val serializationEnabled = clean.contains("plugin.serialization") ||
+            clean.contains("kotlin-serialization") ||
+            clean.contains("kotlinx.serialization")
+
+        val parcelizeEnabled = clean.contains("kotlin-parcelize") ||
+            clean.contains("kotlin.parcelize") ||
+            clean.contains("plugin.parcelize")
 
         val viewBindingEnabled = Regex("""viewBinding\s*(?:=|\s)\s*true""").containsMatchIn(clean)
         val buildConfigExplicitFalse = Regex("""buildConfig\s*=\s*false""").containsMatchIn(clean)
@@ -429,6 +439,8 @@ object DeclarativeProjectParser {
             versionCode = versionCode,
             versionName = versionName,
             composeEnabled = composeEnabled,
+            serializationEnabled = serializationEnabled,
+            parcelizeEnabled = parcelizeEnabled,
             viewBindingEnabled = viewBindingEnabled,
             buildConfigEnabled = !buildConfigExplicitFalse,
             nonTransitiveRClass = nonTransitiveR,
@@ -438,6 +450,7 @@ object DeclarativeProjectParser {
             resDirs = resDirs,
             assetsDirs = assetsDirs,
             manifestFile = manifestFile,
+            googleServicesFile = googleServicesFile,
             proguardFiles = proguardFiles,
             localJarFiles = localJars,
             dependencies = deps.distinctBy { it.groupArtifactKey },

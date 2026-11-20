@@ -52,6 +52,41 @@ object KotlinNativeCompiler {
     fun hasKotlinSources(module: ModuleConfig, extraSourceDirs: List<File> = emptyList()): Boolean =
         collectKotlinFiles(module.sourceDirs + extraSourceDirs).isNotEmpty()
 
+    fun resolveBundledRuntimeJars(
+        context: Context,
+        module: ModuleConfig,
+        classpathJars: List<File>,
+        hasKotlin: Boolean = true
+    ): List<File> {
+        if (!hasKotlin) return emptyList()
+        val extra = mutableListOf<File>()
+
+        val hasStdlib = classpathJars.any {
+            val n = it.name.lowercase()
+            n.startsWith("kotlin-stdlib") && !n.startsWith("kotlin-stdlib-common")
+        }
+        if (!hasStdlib) {
+            val bundledStdlib = SdkEngineManager.getBundledKotlinStdlibJar(context)
+            if (bundledStdlib.exists() && bundledStdlib.length() > 0L) {
+                extra.add(bundledStdlib)
+            }
+        }
+
+        if (module.parcelizeEnabled) {
+            val hasParcelizeRt = classpathJars.any {
+                it.name.contains("kotlin-parcelize-runtime", ignoreCase = true)
+            }
+            if (!hasParcelizeRt) {
+                val bundledParcelizeRt = SdkEngineManager.getBundledParcelizeRuntimeJar(context)
+                if (bundledParcelizeRt.exists() && bundledParcelizeRt.length() > 0L) {
+                    extra.add(bundledParcelizeRt)
+                }
+            }
+        }
+
+        return extra
+    }
+
     fun compile(
         context: Context,
         module: ModuleConfig,
@@ -84,7 +119,7 @@ object KotlinNativeCompiler {
                 classesDir = classesOutDir,
                 kotlinFileCount = ktFiles.size,
                 compiledClassCount = 0,
-                errorMessage = "Kotlin + Compose Compiler Pack could not be initialized. Check internet connection for first-time auto-setup."
+                errorMessage = "Offline Kotlin Compiler Pack is not ready. Please check Build Runtime settings."
             )
         }
 
@@ -98,19 +133,9 @@ object KotlinNativeCompiler {
             )
 
         val javaSourceFiles = collectJavaFiles(module.sourceDirs + listOf(generatedJavaDir) + extraSourceDirs)
-
-        // যদি Maven ডিপেন্ডেন্সিতে kotlin-stdlib না থাকে (যেমন একদম বেসিক/অফলাইন Kotlin প্রজেক্ট), তবে বান্ডেলড stdlib যোগ করা
-        val extraRuntimeJars = mutableListOf<File>()
-        val hasStdlibInClasspath = classpathJars.any {
-            val n = it.name.lowercase()
-            n.startsWith("kotlin-stdlib") && !n.startsWith("kotlin-stdlib-common")
-        }
-        if (!hasStdlibInClasspath) {
-            val bundledStdlib = SdkEngineManager.getBundledKotlinStdlibJar(context)
-            if (bundledStdlib.exists() && bundledStdlib.length() > 0L) {
-                extraRuntimeJars.add(bundledStdlib)
-                onLog("  Using built-in kotlin-stdlib (${bundledStdlib.name})")
-            }
+        val extraRuntimeJars = resolveBundledRuntimeJars(context, module, classpathJars, hasKotlin = true)
+        if (extraRuntimeJars.isNotEmpty()) {
+            onLog("  Using built-in Kotlin runtime: ${extraRuntimeJars.joinToString(", ") { it.name }}")
         }
 
         val cpList = buildList {
@@ -155,8 +180,24 @@ object KotlinNativeCompiler {
                     runCatching { composeJar.setReadOnly() }
                     add("-Xplugin=${composeJar.absolutePath}")
                     onLog("  Compose Compiler Plugin enabled")
-                } else {
-                    onLog("  WARN: Compose plugin descriptor not found; compiling Kotlin without Compose IR plugin.")
+                }
+            }
+
+            if (module.serializationEnabled) {
+                val serJar = SdkEngineManager.getSerializationPluginJar(context)
+                if (serJar.exists() && serJar.length() > 0L) {
+                    runCatching { serJar.setReadOnly() }
+                    add("-Xplugin=${serJar.absolutePath}")
+                    onLog("  kotlinx.serialization Plugin enabled")
+                }
+            }
+
+            if (module.parcelizeEnabled) {
+                val parJar = SdkEngineManager.getParcelizePluginJar(context)
+                if (parJar.exists() && parJar.length() > 0L) {
+                    runCatching { parJar.setReadOnly() }
+                    add("-Xplugin=${parJar.absolutePath}")
+                    onLog("  @Parcelize Compiler Plugin enabled")
                 }
             }
         }
@@ -265,7 +306,7 @@ object KotlinNativeCompiler {
 
         if (allFiles.isEmpty()) return null
 
-        // Android 14+ (API 34+) Security Policy: DexClassLoader ফাইলের ওপর read-only বাধ্যতামূলক
+        // Android 14+ (API 34+) security: DexClassLoader ফাইলের ওপর read-only বাধ্যতামূলক
         allFiles.forEach { runCatching { it.setReadOnly() } }
 
         val resourceFiles = allFiles.filter { it.name.equals("kotlinc_resources.zip", ignoreCase = true) }
@@ -279,7 +320,6 @@ object KotlinNativeCompiler {
         }
 
         return try {
-            // kotlinc_resources.zip-কে parent URLClassLoader হিসেবে রাখলে ART কোনো "no classes.dex" ওয়ার্নিং ছাড়াই সব রিসোর্স খুঁজে পায়
             val parentLoader: ClassLoader = if (resourceFiles.isNotEmpty()) {
                 URLClassLoader(
                     resourceFiles.map { it.toURI().toURL() }.toTypedArray(),
