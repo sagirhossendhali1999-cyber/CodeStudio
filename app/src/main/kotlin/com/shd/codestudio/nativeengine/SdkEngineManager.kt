@@ -552,7 +552,7 @@ object SdkEngineManager {
 
     private fun deleteRecursivelySafe(file: File): Boolean {
         if (!file.exists()) return true
-        file.walkBottomDown().forEach { f ->
+        file.walkBottomUp().forEach { f ->
             runCatching { f.setWritable(true, false) }
             runCatching { f.delete() }
         }

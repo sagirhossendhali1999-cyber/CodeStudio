@@ -149,7 +149,22 @@
           "line": 285
         }
       }
+    },
+    {
+      "file": "/storage/emulated/0/AndroidIDEProjects/CodeStudio/gradle/wrapper/gradle-wrapper.properties",
+      "selection": {
+        "end": {
+          "column": 26,
+          "index": 251,
+          "line": 6
+        },
+        "start": {
+          "column": 26,
+          "index": 251,
+          "line": 6
+        }
+      }
     }
   ],
-  "selectedFile": "/storage/emulated/0/AndroidIDEProjects/CodeStudio/.github/workflows/build.yml"
+  "selectedFile": "/storage/emulated/0/AndroidIDEProjects/CodeStudio/gradle/wrapper/gradle-wrapper.properties"
 }
