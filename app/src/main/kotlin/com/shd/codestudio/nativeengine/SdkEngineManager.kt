@@ -97,7 +97,7 @@ object SdkEngineManager {
     private const val ASSET_KOTLINC_PACK = "kotlinc-compose-pack.zip"
 
     const val DEFAULT_KOTLINC_PACK_URL =
-        "https://github.com/sagirhossenali1999-cyber/CodeStudio/releases/download/engine-kotlinc-latest/kotlinc-compose-pack.zip"
+        "https://github.com/sagirhossendhali1999-cyber/CodeStudio/releases/download/engine-kotlinc-latest/kotlinc-compose-pack.zip"
 
     val SUPPORTED_PLATFORMS = listOf(
         SdkPlatformSpec(
@@ -249,10 +249,16 @@ object SdkEngineManager {
 
     fun getKotlincPackUrl(context: Context): String {
         val prefs = context.getSharedPreferences(PREFS_ENGINE, Context.MODE_PRIVATE)
-        return prefs.getString(KEY_KOTLINC_PACK_URL, DEFAULT_KOTLINC_PACK_URL)
+        val saved = prefs.getString(KEY_KOTLINC_PACK_URL, DEFAULT_KOTLINC_PACK_URL)
             ?.trim()
             ?.takeIf { it.isNotEmpty() }
             ?: DEFAULT_KOTLINC_PACK_URL
+
+        if (saved.contains("sagirhossenali1999-cyber")) {
+            prefs.edit().putString(KEY_KOTLINC_PACK_URL, DEFAULT_KOTLINC_PACK_URL).apply()
+            return DEFAULT_KOTLINC_PACK_URL
+        }
+        return saved
     }
 
     fun saveKotlincPackUrl(context: Context, url: String) {
@@ -467,7 +473,6 @@ object SdkEngineManager {
                 var entry = zis.nextEntry
                 while (entry != null) {
                     var relName = entry.name.replace("\\", "/").trimStart('/')
-                    // কোনো অতিরিক্ত প্যারেন্ট রুট থাকলে তা স্বাভাবিক করা
                     if (relName.startsWith("./")) relName = relName.removePrefix("./")
                     if (relName.isNotEmpty()) {
                         val target = File(stageDir, relName)
@@ -490,7 +495,6 @@ object SdkEngineManager {
                 }
             }
 
-            // যদি কোনো সিঙ্গেল র‍্যাপার ফোল্ডারের ভেতরে `dex/` থাকে, তবে রুট এলিভেট করা
             val dexCandidate = File(stageDir, "dex")
             val effectiveStage = if (!dexCandidate.exists()) {
                 val sub = stageDir.listFiles()?.firstOrNull { it.isDirectory && File(it, "dex").isDirectory }
@@ -533,7 +537,6 @@ object SdkEngineManager {
                 deleteRecursivelySafe(stageDir)
             }
 
-            // renameTo বা copyRecursively-এর পরে read-only নিশ্চিত করা
             targetDir.walkTopDown().forEach { f ->
                 if (f.isFile && (f.parentFile?.name in setOf("dex", "plugins", "stdlib"))) {
                     runCatching { f.setReadOnly() }
