@@ -65,12 +65,12 @@
       "selection": {
         "end": {
           "column": 1,
-          "index": 39761,
+          "index": 39759,
           "line": 970
         },
         "start": {
           "column": 1,
-          "index": 39761,
+          "index": 39759,
           "line": 970
         }
       }
@@ -166,5 +166,5 @@
       }
     }
   ],
-  "selectedFile": "/storage/emulated/0/AndroidIDEProjects/CodeStudio/gradle/wrapper/gradle-wrapper.properties"
+  "selectedFile": "/storage/emulated/0/AndroidIDEProjects/CodeStudio/app/src/main/kotlin/com/shd/codestudio/nativeengine/SdkEngineManager.kt"
 }
