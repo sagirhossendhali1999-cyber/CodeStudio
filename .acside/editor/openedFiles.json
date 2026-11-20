@@ -65,13 +65,13 @@
       "selection": {
         "end": {
           "column": 1,
-          "index": 39764,
-          "line": 967
+          "index": 39761,
+          "line": 970
         },
         "start": {
           "column": 1,
-          "index": 39764,
-          "line": 967
+          "index": 39761,
+          "line": 970
         }
       }
     },
@@ -121,5 +121,5 @@
       }
     }
   ],
-  "selectedFile": "/storage/emulated/0/AndroidIDEProjects/CodeStudio/app/src/main/kotlin/com/shd/codestudio/editorscreen/LivePreviewPage.kt"
+  "selectedFile": "/storage/emulated/0/AndroidIDEProjects/CodeStudio/app/src/main/kotlin/com/shd/codestudio/nativeengine/SdkEngineManager.kt"
 }
