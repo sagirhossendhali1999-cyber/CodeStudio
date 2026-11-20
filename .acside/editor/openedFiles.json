@@ -4,14 +4,14 @@
       "file": "/storage/emulated/0/AndroidIDEProjects/CodeStudio/.github/workflows/build.yml",
       "selection": {
         "end": {
-          "column": 31,
-          "index": 333,
-          "line": 19
+          "column": 33,
+          "index": 949,
+          "line": 38
         },
         "start": {
-          "column": 31,
-          "index": 333,
-          "line": 19
+          "column": 33,
+          "index": 949,
+          "line": 38
         }
       }
     },
@@ -119,7 +119,22 @@
           "line": 2110
         }
       }
+    },
+    {
+      "file": "/storage/emulated/0/AndroidIDEProjects/CodeStudio/gradle/wrapper/gradle-wrapper.jar",
+      "selection": {
+        "end": {
+          "column": 0,
+          "index": 0,
+          "line": 0
+        },
+        "start": {
+          "column": 0,
+          "index": 0,
+          "line": 0
+        }
+      }
     }
   ],
-  "selectedFile": "/storage/emulated/0/AndroidIDEProjects/CodeStudio/app/src/main/kotlin/com/shd/codestudio/nativeengine/SdkEngineManager.kt"
+  "selectedFile": "/storage/emulated/0/AndroidIDEProjects/CodeStudio/gradle/wrapper/gradle-wrapper.jar"
 }
