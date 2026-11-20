@@ -1,65 +1,125 @@
 {
   "allFiles": [
     {
-      "file": "/storage/emulated/0/AndroidIDEProjects/CodeStudio/app/build.gradle.kts",
+      "file": "/storage/emulated/0/AndroidIDEProjects/CodeStudio/.github/workflows/build.yml",
       "selection": {
         "end": {
-          "column": 1,
-          "index": 2467,
-          "line": 76
+          "column": 31,
+          "index": 333,
+          "line": 19
         },
         "start": {
-          "column": 1,
-          "index": 2467,
-          "line": 76
+          "column": 31,
+          "index": 333,
+          "line": 19
         }
       }
     },
     {
-      "file": "/storage/emulated/0/AndroidIDEProjects/CodeStudio/app/src/main/kotlin/com/shd/codestudio/PRootManager.kt",
+      "file": "/storage/emulated/0/AndroidIDEProjects/CodeStudio/.github/workflows/build-kotlinc-pack.yml",
       "selection": {
         "end": {
-          "column": 1,
-          "index": 5044,
-          "line": 127
+          "column": 28,
+          "index": 9109,
+          "line": 200
         },
         "start": {
-          "column": 1,
-          "index": 5044,
-          "line": 127
+          "column": 28,
+          "index": 9109,
+          "line": 200
         }
       }
     },
     {
-      "file": "/storage/emulated/0/AndroidIDEProjects/CodeStudio/app/src/main/kotlin/com/shd/codestudio/TerminalScreen.kt",
+      "file": "/storage/emulated/0/AndroidIDEProjects/CodeStudio/app/src/main/kotlin/com/shd/codestudio/nativeengine/JavaEcjCompiler.kt",
       "selection": {
         "end": {
           "column": 1,
-          "index": 3230,
-          "line": 75
+          "index": 10627,
+          "line": 302
         },
         "start": {
           "column": 1,
-          "index": 3230,
-          "line": 75
+          "index": 10627,
+          "line": 302
         }
       }
     },
     {
-      "file": "/storage/emulated/0/AndroidIDEProjects/CodeStudio/app/src/main/kotlin/com/shd/codestudio/HomeScreen.kt",
+      "file": "/storage/emulated/0/AndroidIDEProjects/CodeStudio/app/src/main/kotlin/com/shd/codestudio/nativeengine/KotlinNativeCompiler.kt",
       "selection": {
         "end": {
           "column": 1,
-          "index": 14134,
-          "line": 261
+          "index": 14283,
+          "line": 357
         },
         "start": {
           "column": 1,
-          "index": 14134,
-          "line": 261
+          "index": 14283,
+          "line": 357
+        }
+      }
+    },
+    {
+      "file": "/storage/emulated/0/AndroidIDEProjects/CodeStudio/app/src/main/kotlin/com/shd/codestudio/nativeengine/SdkEngineManager.kt",
+      "selection": {
+        "end": {
+          "column": 1,
+          "index": 39764,
+          "line": 967
+        },
+        "start": {
+          "column": 1,
+          "index": 39764,
+          "line": 967
+        }
+      }
+    },
+    {
+      "file": "/storage/emulated/0/AndroidIDEProjects/CodeStudio/app/src/main/kotlin/com/shd/codestudio/nativeengine/NativeBuildOrchestrator.kt",
+      "selection": {
+        "end": {
+          "column": 1,
+          "index": 29387,
+          "line": 686
+        },
+        "start": {
+          "column": 1,
+          "index": 29387,
+          "line": 686
+        }
+      }
+    },
+    {
+      "file": "/storage/emulated/0/AndroidIDEProjects/CodeStudio/app/src/main/kotlin/com/shd/codestudio/nativeengine/EngineManagerDialog.kt",
+      "selection": {
+        "end": {
+          "column": 1,
+          "index": 62179,
+          "line": 1050
+        },
+        "start": {
+          "column": 1,
+          "index": 62179,
+          "line": 1050
+        }
+      }
+    },
+    {
+      "file": "/storage/emulated/0/AndroidIDEProjects/CodeStudio/app/src/main/kotlin/com/shd/codestudio/editorscreen/LivePreviewPage.kt",
+      "selection": {
+        "end": {
+          "column": 1,
+          "index": 121417,
+          "line": 2110
+        },
+        "start": {
+          "column": 1,
+          "index": 121417,
+          "line": 2110
         }
       }
     }
   ],
-  "selectedFile": "/storage/emulated/0/AndroidIDEProjects/CodeStudio/app/src/main/kotlin/com/shd/codestudio/PRootManager.kt"
+  "selectedFile": "/storage/emulated/0/AndroidIDEProjects/CodeStudio/app/src/main/kotlin/com/shd/codestudio/editorscreen/LivePreviewPage.kt"
 }

@@ -1,0 +1,201 @@
+name: Build Kotlin + Compose Engine Pack
+
+on:
+  workflow_dispatch:
+    inputs:
+      kotlin_version:
+        description: 'Kotlin & Compose Compiler Version (must match IDE Kotlin version)'
+        required: true
+        default: '2.4.21'
+      min_api:
+        description: 'Minimum Android API level for D8 dexing'
+        required: true
+        default: '30'
+
+permissions:
+  contents: write
+
+jobs:
+  build-kotlinc-pack:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Download Kotlin Compiler & Compose Plugin via Maven
+        env:
+          KOTLIN_VERSION: ${{ github.event.inputs.kotlin_version || '2.4.21' }}
+        run: |
+          mkdir -p /tmp/kotlinc-build/jars
+          cat <<EOF > /tmp/kotlinc-build/pom.xml
+          <project xmlns="http://maven.apache.org/POM/4.0.0">
+            <modelVersion>4.0.0</modelVersion>
+            <groupId>com.shd.codestudio</groupId>
+            <artifactId>kotlinc-pack-fetcher</artifactId>
+            <version>1.0.0</version>
+            <dependencies>
+              <dependency>
+                <groupId>org.jetbrains.kotlin</groupId>
+                <artifactId>kotlin-compiler-embeddable</artifactId>
+                <version>${KOTLIN_VERSION}</version>
+              </dependency>
+              <dependency>
+                <groupId>org.jetbrains.kotlin</groupId>
+                <artifactId>kotlin-compose-compiler-plugin-embeddable</artifactId>
+                <version>${KOTLIN_VERSION}</version>
+              </dependency>
+            </dependencies>
+          </project>
+          EOF
+
+          mvn -B -f /tmp/kotlinc-build/pom.xml dependency:copy-dependencies \
+            -DoutputDirectory=/tmp/kotlinc-build/jars \
+            -DincludeScope=runtime
+
+          ls -lh /tmp/kotlinc-build/jars
+
+      - name: Prepare Deduplicated Class JARs, Resources & Android-Safe Compose Plugin Descriptor
+        env:
+          KOTLIN_VERSION: ${{ github.event.inputs.kotlin_version || '2.4.21' }}
+        run: |
+          python3 - <<'PY'
+          import os, glob, zipfile, json
+
+          jars_dir = "/tmp/kotlinc-build/jars"
+          work_dir = "/tmp/kotlinc-build/work"
+          pack_dir = "/tmp/kotlinc-build/pack"
+          os.makedirs(work_dir, exist_ok=True)
+          os.makedirs(os.path.join(pack_dir, "dex"), exist_ok=True)
+          os.makedirs(os.path.join(pack_dir, "plugins"), exist_ok=True)
+          os.makedirs(os.path.join(pack_dir, "stdlib"), exist_ok=True)
+
+          all_jars = sorted(glob.glob(os.path.join(jars_dir, "*.jar")))
+          compose_jars = [j for j in all_jars if "kotlin-compose-compiler-plugin" in os.path.basename(j)]
+          core_jars = [j for j in all_jars if j not in compose_jars]
+          stdlib_jars = [j for j in all_jars if os.path.basename(j).startswith("kotlin-stdlib-")]
+
+          # ১. stdlib/kotlin-stdlib.jar কপি করা (অফলাইন/জিরো-ডিপেন্ডেন্সি Kotlin প্রজেক্টের জন্য)
+          if stdlib_jars:
+              with open(stdlib_jars[0], "rb") as src, open(os.path.join(pack_dir, "stdlib", "kotlin-stdlib.jar"), "wb") as dst:
+                  dst.write(src.read())
+
+          def is_ignored_entry(name: str) -> bool:
+              if name.endswith("/"):
+                  return True
+              if name == "module-info.class" or name.endswith("/module-info.class"):
+                  return True
+              if name.startswith("META-INF/versions/"):
+                  return True
+              if name == "META-INF/MANIFEST.MF":
+                  return True
+              upper = name.upper()
+              if upper.startswith("META-INF/") and (upper.endswith(".SF") or upper.endswith(".DSA") or upper.endswith(".RSA")):
+                  return True
+              return False
+
+          def pack_classes_and_resources(jar_list, out_classes_jar, out_res_zip, exclude_classes=False):
+              seen_classes = set()
+              seen_res = set()
+              services = {}
+              with zipfile.ZipFile(out_classes_jar, "w", compression=zipfile.ZIP_STORED) as z_cls, \
+                   zipfile.ZipFile(out_res_zip, "w", compression=zipfile.ZIP_DEFLATED) as z_res:
+                  for jar_path in jar_list:
+                      with zipfile.ZipFile(jar_path, "r") as zin:
+                          for info in zin.infolist():
+                              name = info.filename.replace("\\", "/")
+                              if is_ignored_entry(name):
+                                  continue
+                              data = zin.read(info.filename)
+                              if name.endswith(".class"):
+                                  if not exclude_classes and name not in seen_classes:
+                                      seen_classes.add(name)
+                                      z_cls.writestr(name, data)
+                              elif name.startswith("META-INF/services/") and len(name) > len("META-INF/services/"):
+                                  lines = [l.strip() for l in data.decode("utf-8", errors="ignore").splitlines() if l.strip()]
+                                  services.setdefault(name, [])
+                                  for l in lines:
+                                      if l not in services[name]:
+                                          services[name].append(l)
+                              else:
+                                  if name not in seen_res:
+                                      seen_res.add(name)
+                                      z_res.writestr(name, data)
+                  for svc_name, lines in services.items():
+                      z_res.writestr(svc_name, ("\n".join(lines) + "\n").encode("utf-8"))
+
+          # ২. Core Compiler ক্লাস ও রিসোর্স আলাদা করা
+          pack_classes_and_resources(
+              core_jars,
+              os.path.join(work_dir, "kotlinc_core_classes.jar"),
+              os.path.join(pack_dir, "dex", "kotlinc_resources.zip"),
+              exclude_classes=False
+          )
+
+          # ৩. Compose Compiler Plugin: ক্লাসগুলো DEX-এর জন্য আলাদা এবং plugins/compose-compiler.jar-এ শুধু META-INF/services রাখা
+          # (যাতে Android ART-এ URLClassLoader কখনো JVM .class লোড করতে গিয়ে ক্র্যাশ না করে, বরং parent DexClassLoader থেকে pre-dexed ক্লাস লোড করে!)
+          pack_classes_and_resources(
+              compose_jars,
+              os.path.join(work_dir, "compose_plugin_classes.jar"),
+              os.path.join(pack_dir, "plugins", "compose-compiler.jar"),
+              exclude_classes=False
+          )
+
+          manifest = {
+              "kotlinVersion": os.environ["KOTLIN_VERSION"],
+              "format": "codestudio-kotlinc-pack-v2",
+              "composeIncluded": len(compose_jars) > 0
+          }
+          with open(os.path.join(pack_dir, "manifest.json"), "w", encoding="utf-8") as f:
+              json.dump(manifest, f, indent=2)
+          print("Prepared class JARs and descriptors successfully.")
+          PY
+
+      - name: Pre-DEX Kotlin Compiler & Compose Plugin using Android D8
+        env:
+          MIN_API: ${{ github.event.inputs.min_api || '30' }}
+        run: |
+          SDK_ROOT="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
+          BUILD_TOOLS_DIR=$(ls -d "$SDK_ROOT/build-tools/"* | sort -V | tail -n 1)
+          ANDROID_JAR=$(ls -d "$SDK_ROOT/platforms/android-"*/android.jar | sort -V | tail -n 1)
+          D8_JAR="$BUILD_TOOLS_DIR/lib/d8.jar"
+
+          echo "Using D8: $D8_JAR"
+          echo "Using Android Platform: $ANDROID_JAR"
+
+          java -Xmx5g -cp "$D8_JAR" com.android.tools.r8.D8 \
+            --release \
+            --min-api "$MIN_API" \
+            --lib "$ANDROID_JAR" \
+            --output /tmp/kotlinc-build/pack/dex/kotlinc_core.zip \
+            /tmp/kotlinc-build/work/kotlinc_core_classes.jar
+
+          java -Xmx5g -cp "$D8_JAR" com.android.tools.r8.D8 \
+            --release \
+            --min-api "$MIN_API" \
+            --lib "$ANDROID_JAR" \
+            --classpath /tmp/kotlinc-build/work/kotlinc_core_classes.jar \
+            --output /tmp/kotlinc-build/pack/dex/kotlinc_compose.zip \
+            /tmp/kotlinc-build/work/compose_plugin_classes.jar
+
+          cd /tmp/kotlinc-build/pack
+          zip -r -9 /tmp/kotlinc-build/kotlinc-compose-pack.zip .
+          ls -lh /tmp/kotlinc-build/kotlinc-compose-pack.zip
+
+      - name: Publish to GitHub Release (engine-kotlinc-latest)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: engine-kotlinc-latest
+          name: CodeStudio Kotlin + Compose Compiler Pack (${{ github.event.inputs.kotlin_version || '2.4.21' }})
+          body: |
+            Automated pre-dexed Kotlin + Jetpack Compose compiler engine pack for CodeStudio Zero-Setup Auto-Pilot builds.
+            - Kotlin Version: `${{ github.event.inputs.kotlin_version || '2.4.21' }}`
+            - Min API: `${{ github.event.inputs.min_api || '30' }}`
+          files: /tmp/kotlinc-build/kotlinc-compose-pack.zip
+          make_latest: false

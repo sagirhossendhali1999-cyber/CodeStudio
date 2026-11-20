@@ -1,29 +1,73 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- স্টোরেজ পারমিশন (ফাইল ও জিপ ফাইল রিড/রাইট করার জন্য) -->
+    <!-- ইন্টারনেট ও নেটওয়ার্ক -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <!-- স্টোরেজ অ্যাক্সেস -->
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
-    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
+    <uses-permission
+        android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
+        tools:ignore="ScopedStorage" />
+
+    <!-- প্যাকেজ ইনস্টল -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <application
         android:allowBackup="true"
+        android:allowNativeHeapPointerTagging="false"
+        android:extractNativeLibs="true"
         android:icon="@mipmap/ic_launcher"
         android:label="CodeStudio"
+        android:largeHeap="true"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
-        android:theme="@style/Theme.CodeStudio">
-        
+        android:theme="@style/Theme.CodeStudio"
+        android:usesCleartextTraffic="true">
+
         <activity
             android:name=".MainActivity"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden"
             android:exported="true"
-            android:theme="@style/Theme.CodeStudio">
+            android:launchMode="singleTop"
+            android:theme="@style/Theme.CodeStudio"
+            android:windowSoftInputMode="adjustResize|stateAlwaysHidden">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+
+            <!-- GitHub ডিপ লিংকিং সাপোর্ট -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:host="github-callback"
+                    android:scheme="codestudio" />
+            </intent-filter>
         </activity>
-        
+
+        <!-- আলাদা মেমোরি হিপসহ ইন-প্রসেস কম্পাইলার ওয়ার্কার সার্ভিস -->
+        <service
+            android:name=".nativeengine.CompilerWorkerService"
+            android:exported="false"
+            android:process=":compiler" />
+
+        <!-- Local Engine ও APK ইনস্টলারের জন্য FileProvider -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
     </application>
 
 </manifest>

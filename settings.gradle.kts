@@ -2,7 +2,7 @@ pluginManagement {
     repositories {
         google()
         mavenCentral()
-        gradlePluginPortal() // <--- এই লাইনটি Kotlin Compose প্লাগইন খুঁজে পেতে সাহায্য করবে
+        gradlePluginPortal()
     }
 }
 dependencyResolutionManagement {
@@ -10,6 +10,7 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
+        maven { url = uri("https://jitpack.io") } // 🚨 এই লাইনটি থাকতেই হবে
     }
 }
 
